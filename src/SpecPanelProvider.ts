@@ -1172,8 +1172,8 @@ export class SpecPanelProvider {
       const attachedCount = allCommands.has('chatgpt.addFileToThread')
         ? await this.attachSpecFilesToOpenAICodex(specsFolder, specName)
         : 0;
-      const submitted = await this.submitPromptToOpenAICodex(prompt, allCommands);
-      if (!submitted) {
+      const submitState = await this.submitPromptToOpenAICodex(prompt, allCommands);
+      if (submitState !== 'submitted') {
         await vscode.env.clipboard.writeText(prompt);
       }
 
@@ -1181,9 +1181,12 @@ export class SpecPanelProvider {
         attachedCount > 0
           ? ` and ${attachedCount} spec file${attachedCount === 1 ? '' : 's'} attached`
           : '';
-      const submitNote = submitted
-        ? '. Run-all command sent to Codex.'
-        : '. Task prompt copied to clipboard. Paste and submit to run.';
+      const submitNote =
+        submitState === 'submitted'
+          ? '. Run-all command submitted to Codex chat.'
+          : submitState === 'prefilled'
+            ? '. Run-all command was prefilled in chat input and copied to clipboard.'
+            : '. Task prompt copied to clipboard. Paste and submit to run.';
       vscode.window.showInformationMessage(`nSpec: OpenAI Codex chat opened${attachmentNote}${submitNote}`);
       return true;
     } catch {
@@ -1194,7 +1197,23 @@ export class SpecPanelProvider {
   private async submitPromptToOpenAICodex(
     prompt: string,
     allCommands: Set<string>
-  ): Promise<boolean> {
+  ): Promise<'submitted' | 'prefilled' | 'none'> {
+    const chatOpenCommands = ['workbench.action.chat.open', 'chat.open'];
+    for (const cmd of chatOpenCommands) {
+      if (!allCommands.has(cmd)) continue;
+      try {
+        await vscode.commands.executeCommand(cmd, { query: prompt, isPartialQuery: false });
+        return 'submitted';
+      } catch {
+        try {
+          await vscode.commands.executeCommand(cmd, { query: prompt, isPartialQuery: true });
+          return 'prefilled';
+        } catch {
+          // Continue to other command strategies.
+        }
+      }
+    }
+
     try {
       if (allCommands.has('chatgpt.openSidebar')) {
         await vscode.commands.executeCommand('chatgpt.openSidebar');
@@ -1210,17 +1229,15 @@ export class SpecPanelProvider {
         if (!allCommands.has(cmd)) continue;
         try {
           await vscode.commands.executeCommand(cmd);
-          return true;
+          return 'submitted';
         } catch {
           // Try next submit command.
         }
       }
 
-      // Fallback: simulate Enter key to submit for chat implementations that map Enter to send.
-      await vscode.commands.executeCommand('type', { text: '\n' });
-      return true;
+      return 'prefilled';
     } catch {
-      return false;
+      return 'none';
     }
   }
 
@@ -1873,11 +1890,7 @@ textarea.modal-input{resize:vertical;min-height:90px;line-height:1.5}
       </div>
       <div class="modal-field">
         <label class="modal-label" for="new-spec-name">Name</label>
-        <input class="modal-input" id="new-spec-name" type="text" placeholder="e.g. User Authentication, M2 Gatekeeper Attack">
-      </div>
-      <div class="modal-field" id="jira-field">
-        <label class="modal-label" for="new-spec-jira">Jira URL or ID <span style="font-weight:400;color:var(--text-muted)">(optional - auto-selects Feature type)</span></label>
-        <input class="modal-input" id="new-spec-jira" type="text" placeholder="https://your-domain.atlassian.net/browse/PROJ-123 or ET-1905">
+        <input class="modal-input" id="new-spec-name" type="text" placeholder="e.g. User Authentication">
       </div>
       <div class="modal-field">
         <label class="modal-label" for="new-spec-prompt" id="prompt-label">Description</label>
@@ -1887,11 +1900,6 @@ textarea.modal-input{resize:vertical;min-height:90px;line-height:1.5}
         <label class="modal-label" for="new-spec-template">Template <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
         <select class="modal-input" id="new-spec-template" style="padding:7px 11px">
           <option value="">No template - start blank</option>
-          <option value="rest-api">REST API - CRUD endpoints, auth, validation</option>
-          <option value="game-feature">Game Feature - Player-facing feature</option>
-          <option value="ml-experiment">ML Experiment - Model training / evaluation</option>
-          <option value="cli-tool">CLI Tool - Command-line application</option>
-          <option value="library-sdk">Library / SDK - Reusable package</option>
         </select>
       </div>
       <div class="modal-actions">

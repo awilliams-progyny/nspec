@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+out/
+
+# Packaged extension
+*.vsix
+
+# Environment & secrets — NEVER commit these
+.env
+.env.*
+!.env.example
+*.local.json
+
+# Test harness runs
+.harness-runs/
+
+# Python caches (test-workspace)
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Editor
+.DS_Store
+Thumbs.db
+
+# Cursor IDE workspace files (excluded from VSIX already; keep out of git too)
+.cursor/

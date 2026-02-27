@@ -1198,43 +1198,13 @@ export class SpecPanelProvider {
     prompt: string,
     allCommands: Set<string>
   ): Promise<'submitted' | 'prefilled' | 'none'> {
-    const chatOpenCommands = ['workbench.action.chat.open', 'chat.open'];
-    for (const cmd of chatOpenCommands) {
-      if (!allCommands.has(cmd)) continue;
-      try {
-        await vscode.commands.executeCommand(cmd, { query: prompt, isPartialQuery: false });
-        return 'submitted';
-      } catch {
-        try {
-          await vscode.commands.executeCommand(cmd, { query: prompt, isPartialQuery: true });
-          return 'prefilled';
-        } catch {
-          // Continue to other command strategies.
-        }
-      }
-    }
-
     try {
       if (allCommands.has('chatgpt.openSidebar')) {
         await vscode.commands.executeCommand('chatgpt.openSidebar');
       }
       await vscode.commands.executeCommand('type', { text: prompt });
-
-      const submitCommands = [
-        'workbench.action.chat.submit',
-        'chat.submit',
-        'workbench.action.chat.send',
-      ];
-      for (const cmd of submitCommands) {
-        if (!allCommands.has(cmd)) continue;
-        try {
-          await vscode.commands.executeCommand(cmd);
-          return 'submitted';
-        } catch {
-          // Try next submit command.
-        }
-      }
-
+      // We intentionally avoid generic VS Code chat submit/open commands here
+      // because they may target Copilot chat instead of Codex chat.
       return 'prefilled';
     } catch {
       return 'none';

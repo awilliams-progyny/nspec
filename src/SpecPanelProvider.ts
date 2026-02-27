@@ -1172,7 +1172,12 @@ export class SpecPanelProvider {
       const attachedCount = allCommands.has('chatgpt.addFileToThread')
         ? await this.attachSpecFilesToOpenAICodex(specsFolder, specName)
         : 0;
-      const submitState = await this.submitPromptToOpenAICodex(prompt, allCommands);
+      const submitState = await this.submitPromptToOpenAICodex(
+        prompt,
+        allCommands,
+        specsFolder,
+        specName
+      );
       if (submitState !== 'submitted') {
         await vscode.env.clipboard.writeText(prompt);
       }
@@ -1196,8 +1201,30 @@ export class SpecPanelProvider {
 
   private async submitPromptToOpenAICodex(
     prompt: string,
-    allCommands: Set<string>
+    allCommands: Set<string>,
+    specsFolder: string,
+    specName: string
   ): Promise<'submitted' | 'prefilled' | 'none'> {
+    // Preferred: use Codex-native "implement todo" flow, which submits immediately.
+    if (allCommands.has('chatgpt.implementTodo')) {
+      try {
+        const wsRoot = this.getWorkspaceRoot();
+        if (wsRoot) {
+          const tasksPath = path.resolve(wsRoot, specsFolder, specName, 'tasks.md');
+          const fallbackPath = path.resolve(wsRoot, specsFolder, specName, 'requirements.md');
+          const filePath = fs.existsSync(tasksPath) ? tasksPath : fallbackPath;
+          await vscode.commands.executeCommand('chatgpt.implementTodo', {
+            fileName: encodeURIComponent(filePath),
+            line: 1,
+            comment: prompt,
+          });
+          return 'submitted';
+        }
+      } catch {
+        // Fall through to text-injection fallback.
+      }
+    }
+
     try {
       if (allCommands.has('chatgpt.openSidebar')) {
         await vscode.commands.executeCommand('chatgpt.openSidebar');

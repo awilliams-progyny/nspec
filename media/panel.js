@@ -6,9 +6,6 @@ let state = {
   activeStage: 'requirements',
   contents: {},
   generating: false,
-  models: [],
-  selectedModelId: null,
-  selectedModelName: null,
   progress: null,
   hasCustomPrompts: false,
   editMode: false,
@@ -18,6 +15,15 @@ let streamBuffer = { requirements: '', design: '', tasks: '', verify: '' };
 let streamFramePending = { requirements: false, design: false, tasks: false, verify: false };
 let pendingDelete = null;
 const STAGES = ['requirements', 'design', 'tasks', 'verify'];
+
+const stageStreamState = {
+  active: false,
+  stage: null,
+  chunks: 0,
+  percent: 0,
+  startedAt: 0,
+  hideTimer: null,
+};
 
 // ── Marked setup ────────────────────────────────────────────────────────────
 if (typeof marked !== 'undefined') {
@@ -72,22 +78,15 @@ window.addEventListener('message', e => {
 // ── Init ────────────────────────────────────────────────────────────────────
 function handleInit(msg) {
   state.specs = msg.specs || [];
-  state.models = msg.models || [];
-  state.selectedModelId = msg.selectedModelId || null;
   state.activeSpec = msg.activeSpec;
   state.activeStage = msg.activeStage || 'requirements';
   state.contents = msg.contents || {};
   state.requirementsFormat = msg.requirementsFormat || 'given-when-then';
 
-  // Resolve selected model name
-  const found = state.models.find(m => m.id === state.selectedModelId);
-  state.selectedModelName = found?.name || (state.models[0]?.name ?? null);
-  if (!state.selectedModelId && state.models[0]) {
-    state.selectedModelId = state.models[0].id;
-  }
+  const active = state.specs.find(s => s.name === state.activeSpec);
+  state.progress = active?.progress || null;
 
   renderSidebar();
-  renderModelChip();
   if (state.activeSpec) {
     renderAllStages();
     setActiveStage(state.activeStage);
@@ -97,101 +96,9 @@ function handleInit(msg) {
   }
 }
 
-function handleModelChanged(msg) {
-  state.selectedModelId = msg.modelId;
-  state.selectedModelName = msg.modelName;
-  renderModelChip();
-}
+function handleModelChanged(_msg) {}
 
-function handleModelsLoaded(msg) {
-  state.models = msg.models || [];
-  state.selectedModelId = msg.selectedModelId || state.selectedModelId;
-  const found = state.models.find(m => m.id === state.selectedModelId);
-  state.selectedModelName = found?.name || state.models[0]?.name || null;
-  if (!state.selectedModelId && state.models[0]) state.selectedModelId = state.models[0].id;
-  renderModelChip();
-}
-
-function renderModelChip() {
-  // Inject model chip into topbar if it doesn't already exist
-  let chip = document.getElementById('model-chip');
-  const actions = document.getElementById('topbar-actions');
-  if (!actions) return;
-
-  if (!chip) {
-    chip = document.createElement('div');
-    chip.id = 'model-chip';
-    chip.className = 'model-chip';
-    chip.title = 'Click to change model';
-    chip.addEventListener('click', openModelPicker);
-    // Insert before other actions
-    actions.parentElement.insertBefore(chip, actions);
-  }
-
-  if (state.selectedModelName) {
-    chip.className = 'model-chip';
-    chip.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-    <span class="model-chip-name">${esc(state.selectedModelName)}</span>
-    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>`;
-  } else {
-    chip.className = 'model-chip model-chip-none';
-    chip.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-    <span class="model-chip-name">${state.models.length === 0 ? 'No model — Open settings' : 'No model — click to select'}</span>`;
-  }
-  const noModelCard = document.getElementById('no-model-card');
-  const btnOpenSettings = document.getElementById('btn-open-settings');
-  if (noModelCard) noModelCard.style.display = state.models.length === 0 ? 'block' : 'none';
-  if (btnOpenSettings) {
-    btnOpenSettings.onclick = () => { vscode.postMessage({ command: 'openSettings' }); };
-  }
-}
-
-function openModelPicker() {
-  if (state.models.length === 0) {
-    vscode.postMessage({ command: 'openSettings' });
-    return;
-  }
-
-  // Build inline dropdown
-  const existing = document.getElementById('model-dropdown');
-  if (existing) { existing.remove(); return; }
-
-  const chip = document.getElementById('model-chip');
-  const rect = chip.getBoundingClientRect();
-
-  const dropdown = document.createElement('div');
-  dropdown.id = 'model-dropdown';
-  dropdown.style.cssText = `position:fixed;top:${rect.bottom+4}px;left:${rect.left}px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:200;min-width:260px;overflow:hidden`;
-
-  dropdown.innerHTML = `
-    <div style="padding:8px 12px 6px;font-size:11px;color:var(--text-muted);font-weight:500;border-bottom:1px solid var(--border)">SELECT MODEL</div>
-    ${state.models.map(m => `
-      <div class="model-option ${m.id === state.selectedModelId ? 'selected' : ''}" data-id="${esc(m.id)}" data-name="${esc(m.name)}"
-        style="padding:8px 12px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12.5px;transition:background .1s">
-        <div>
-          <div style="color:var(--text)">${esc(m.name)}</div>
-          <div style="font-size:11px;color:var(--text-muted)">${esc(m.vendor)} · ${esc(m.family)}</div>
-        </div>
-        ${m.id === state.selectedModelId ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
-      </div>
-    `).join('')}
-  `;
-
-  dropdown.querySelectorAll('.model-option').forEach(opt => {
-    opt.addEventListener('mouseover', () => opt.style.background = 'var(--surface2)');
-    opt.addEventListener('mouseout', () => opt.style.background = '');
-    opt.addEventListener('click', () => {
-      const id = opt.dataset.id;
-      vscode.postMessage({ command: 'selectModel', modelId: id });
-      dropdown.remove();
-    });
-  });
-
-  document.body.appendChild(dropdown);
-  setTimeout(() => document.addEventListener('click', function handler(e) {
-    if (!dropdown.contains(e.target)) { dropdown.remove(); document.removeEventListener('click', handler); }
-  }), 10);
-}
+function handleModelsLoaded(_msg) {}
 
 // ── Spec events ─────────────────────────────────────────────────────────────
 function handleSpecCreated(msg) {
@@ -227,6 +134,14 @@ function handleSpecOpened(msg) {
 function handleProgressUpdated(progress) {
   state.progress = progress;
   renderProgress(progress);
+  if (state.contents.tasks) {
+    const tasksEl = document.getElementById('md-tasks');
+    if (tasksEl) {
+      tasksEl.innerHTML = renderInteractiveTasks(state.contents.tasks);
+      wireTaskCheckboxes();
+    }
+  }
+  updateTopbarActions();
   // Update sidebar dot for this spec
   const spec = state.specs.find(s => s.name === state.activeSpec);
   if (spec) { spec.progress = progress; renderSidebar(); }
@@ -247,6 +162,7 @@ let isRefineStream = false;
 function handleStreamStart(msg) {
   state.generating = true;
   isRefineStream = !!msg.isRefine;
+  startStageStreamProgress(msg.stage);
   streamBuffer[msg.stage] = '';
   streamFramePending[msg.stage] = false;
   const el = document.getElementById('md-' + msg.stage);
@@ -257,11 +173,13 @@ function handleStreamStart(msg) {
 
 function handleStreamChunk(msg) {
   streamBuffer[msg.stage] += msg.chunk;
+  bumpStageStreamProgress(msg.stage);
   scheduleStreamRender(msg.stage);
 }
 
 function handleInquiryDone(msg) {
   state.generating = false;
+  completeStageStreamProgress(msg.stage, false);
   streamBuffer[msg.stage] = '';
   // Restore the original document content (streamStart cleared it)
   const el = document.getElementById('md-' + msg.stage);
@@ -281,6 +199,7 @@ function handleInquiryDone(msg) {
 
 function handleStreamDone(msg) {
   state.generating = false;
+  completeStageStreamProgress(msg.stage, false);
   state.contents[msg.stage] = msg.content;
   streamBuffer[msg.stage] = '';
   const el = document.getElementById('md-' + msg.stage);
@@ -455,17 +374,98 @@ function renderSidebar() {
 }
 
 function renderProgress(progress) {
-  if (!progress) return;
   const header = document.getElementById('tasks-progress-header');
+  if (!header) return;
+  if (!progress) {
+    header.style.display = 'none';
+    return;
+  }
+
   const bar = document.getElementById('progress-bar');
   const label = document.getElementById('progress-label');
   const pct = document.getElementById('progress-pct');
-  if (!header || !bar || !label || !pct) return;
+  if (!bar || !label || !pct) return;
+
   const percent = progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
   header.style.display = 'block';
   bar.style.width = percent + '%';
-  label.textContent = `${progress.done} / ${progress.total} tasks complete`;
+  label.textContent = `${progress.total} total • ${progress.done} done • ${progress.checked} checked • ${progress.skipped} skipped`;
   pct.textContent = percent + '%';
+}
+
+function titleCaseStage(stage) {
+  if (stage === 'tasks') return 'Task list';
+  return (stage || '').charAt(0).toUpperCase() + (stage || '').slice(1);
+}
+
+function renderStageStreamProgress() {
+  const wrap = document.getElementById('stage-stream-wrap');
+  const label = document.getElementById('stage-stream-label');
+  const pct = document.getElementById('stage-stream-pct');
+  const bar = document.getElementById('stage-stream-bar');
+  if (!wrap || !label || !pct || !bar) return;
+
+  if (!stageStreamState.active || !stageStreamState.stage) {
+    wrap.classList.remove('visible');
+    bar.style.width = '0%';
+    pct.textContent = '0%';
+    return;
+  }
+
+  wrap.classList.add('visible');
+  const rounded = Math.max(0, Math.min(100, Math.round(stageStreamState.percent)));
+  label.textContent = rounded >= 100
+    ? `${titleCaseStage(stageStreamState.stage)} complete`
+    : `Streaming ${titleCaseStage(stageStreamState.stage)}...`;
+  pct.textContent = rounded + '%';
+  bar.style.width = rounded + '%';
+}
+
+function startStageStreamProgress(stage) {
+  if (stageStreamState.hideTimer) {
+    clearTimeout(stageStreamState.hideTimer);
+    stageStreamState.hideTimer = null;
+  }
+
+  stageStreamState.active = true;
+  stageStreamState.stage = stage;
+  stageStreamState.chunks = 0;
+  stageStreamState.percent = 8;
+  stageStreamState.startedAt = Date.now();
+  renderStageStreamProgress();
+}
+
+function bumpStageStreamProgress(stage) {
+  if (!stageStreamState.active || stageStreamState.stage !== stage) return;
+  stageStreamState.chunks += 1;
+
+  const elapsed = Date.now() - stageStreamState.startedAt;
+  const chunkLift = Math.log1p(stageStreamState.chunks) * 11.5;
+  const elapsedLift = elapsed / 680;
+  const target = Math.min(94, 8 + chunkLift + elapsedLift);
+
+  stageStreamState.percent = Math.max(stageStreamState.percent, target);
+  renderStageStreamProgress();
+}
+
+function completeStageStreamProgress(stage, failed) {
+  if (stage && stageStreamState.stage && stageStreamState.stage !== stage) return;
+  if (!stageStreamState.active) return;
+
+  stageStreamState.percent = failed ? Math.max(stageStreamState.percent, 16) : 100;
+  renderStageStreamProgress();
+
+  const delay = failed ? 700 : 400;
+  if (stageStreamState.hideTimer) clearTimeout(stageStreamState.hideTimer);
+  stageStreamState.hideTimer = setTimeout(() => {
+    stageStreamState.active = false;
+    stageStreamState.stage = null;
+    stageStreamState.percent = 0;
+    stageStreamState.chunks = 0;
+    stageStreamState.startedAt = 0;
+    stageStreamState.hideTimer = null;
+    renderStageStreamProgress();
+  }, delay);
 }
 
 function renderHealthScore(verifyContent) {
@@ -497,21 +497,19 @@ function renderHealthScore(verifyContent) {
 function renderInteractiveTasks(markdown) {
   // Convert markdown but make checkboxes interactive with data-task-id
   const lines = markdown.split('\n');
-  let taskIndex = 0;
-  const processedLines = lines.map(line => {
-    const m = /^(\s*)-\s+\[([ xX])\]\s+(.+?)(\s+\([SMLX]+\))?$/.exec(line);
+  const processedLines = lines.map((line, lineIndex) => {
+    const m = /^(\s*)-\s+\[([ xX])\]\s+(.+?)(?:\s+\([SMLX]+\))?$/.exec(line);
     if (!m) return line;
     const label = m[3].trim();
-    const indent = m[1].length;
-    const checked = m[2].toLowerCase() === 'x';
-    const size = m[4] || '';
+    const markdownDone = m[2].toLowerCase() === 'x';
+    const sizeMatch = /(\s+\([SMLX]+\))$/.exec(line);
+    const size = sizeMatch?.[1] || '';
     // Generate same stableId logic as backend
-    const id = `${label.slice(0,32).replace(/\s+/g,'_').toLowerCase()}_${taskIndex++}`;
+    const id = stableTaskId(label, lineIndex);
+    const taskState = normalizeTaskSelectionState(state.progress?.items?.[id], markdownDone);
 
-    // Use persisted state if available
-    const isChecked = state.progress?.items[id] ?? checked;
-    const checkedStr = isChecked ? 'x' : ' ';
-    return `${m[1]}- [${checkedStr}] ${m[3]}${size} <span style="display:none" data-task-id="${esc(id)}"></span>`;
+    const checkedStr = taskState === 'done' || taskState === 'checked' ? 'x' : ' ';
+    return `${m[1]}- [${checkedStr}] ${m[3]}${size} <span style="display:none" data-task-id="${esc(id)}" data-task-state="${taskState}"></span>`;
   });
   return renderMarkdown(processedLines.join('\n'));
 }
@@ -519,16 +517,32 @@ function renderInteractiveTasks(markdown) {
 function wireTaskCheckboxes() {
   const el = document.getElementById('md-tasks');
   if (!el) return;
-  el.querySelectorAll('input[type=checkbox]').forEach((cb, i) => {
+  el.querySelectorAll('input[type=checkbox]').forEach((cb) => {
+    const li = cb.closest('li');
+    const idSpan = li?.querySelector('[data-task-id]');
+    if (!li || !idSpan) return;
+    const taskState = idSpan.dataset.taskState || 'empty';
+    li.classList.remove('task-state-done', 'task-state-checked', 'task-state-empty');
+    li.classList.add(`task-state-${taskState}`);
+
+    if (taskState === 'done') {
+      cb.checked = true;
+      cb.disabled = true;
+      cb.title = 'Done (read-only)';
+      return;
+    }
+
+    cb.disabled = false;
+    cb.checked = taskState === 'checked';
+
     cb.addEventListener('change', () => {
-      // Find the hidden span with data-task-id nearby
-      const li = cb.closest('li');
-      const idSpan = li?.querySelector('[data-task-id]');
-      if (idSpan) {
-        vscode.postMessage({ command: 'toggleTask', taskId: idSpan.dataset.taskId });
-      }
-      // Optimistic UI
-      cb.closest('li')?.classList.toggle('done', cb.checked);
+      const nextState = cb.checked ? 'checked' : 'empty';
+      const taskId = idSpan.dataset.taskId;
+      if (!taskId) return;
+      idSpan.dataset.taskState = nextState;
+      li.classList.remove('task-state-done', 'task-state-checked', 'task-state-empty');
+      li.classList.add(`task-state-${nextState}`);
+      vscode.postMessage({ command: 'setTaskState', taskId, state: nextState });
     });
   });
 }
@@ -566,10 +580,16 @@ function updateTopbarActions() {
   if (stage === 'tasks') {
     if (!hasTasks && hasDes) html += `<button class="btn-action primary" id="btn-gen-tasks">Generate Tasks</button>`;
     if (hasTasks) {
+      const total = state.progress?.total || 0;
+      const done = state.progress?.done || 0;
+      const checked = state.progress?.checked || 0;
+      const selectable = Math.max(total - done, 0);
       html += `<button class="btn-action run" id="btn-run-tasks">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        Run all
+        Run checked
       </button>`;
+      html += `<button class="btn-action" id="btn-select-all" ${checked >= selectable ? 'disabled' : ''}>Select all</button>`;
+      html += `<button class="btn-action" id="btn-clear-all" ${checked === 0 ? 'disabled' : ''}>Clear</button>`;
       html += `<button class="btn-action primary" id="btn-gen-verify" style="background:var(--yellow);border-color:var(--yellow);color:#1e1e2e">Verify →</button>`;
     }
   }
@@ -590,11 +610,24 @@ function updateTopbarActions() {
   container.querySelector('#btn-gen-design')?.addEventListener('click', () => vscode.postMessage({ command: 'generateDesign' }));
   container.querySelector('#btn-gen-tasks')?.addEventListener('click', () => vscode.postMessage({ command: 'generateTasks' }));
   container.querySelector('#btn-run-tasks')?.addEventListener('click', () => vscode.postMessage({ command: 'runAllTasks' }));
+  container.querySelector('#btn-select-all')?.addEventListener('click', () => vscode.postMessage({ command: 'setAllTasksState', state: 'checked' }));
+  container.querySelector('#btn-clear-all')?.addEventListener('click', () => vscode.postMessage({ command: 'setAllTasksState', state: 'empty' }));
   container.querySelector('#btn-gen-verify')?.addEventListener('click', () => {
     setActiveStage('verify');
     vscode.postMessage({ command: 'generateVerify' });
   });
   container.querySelector('#btn-actions-menu')?.addEventListener('click', () => openActionsMenu(stage, hasContent));
+}
+
+function stableTaskId(label, line) {
+  return `${label.slice(0, 32).replace(/\s+/g, '_').toLowerCase()}_${line}`;
+}
+
+function normalizeTaskSelectionState(raw, markdownDone) {
+  if (raw === 'done' || raw === 'checked' || raw === 'empty') return raw;
+  if (raw === true) return 'done';
+  if (markdownDone) return 'done';
+  return 'empty';
 }
 
 function updateBreadcrumb() {
@@ -668,6 +701,7 @@ function showToast(msg) {
 
 function showError(msg) {
   state.generating = false;
+  completeStageStreamProgress(state.activeStage, true);
   STAGES.forEach(s => document.getElementById('md-' + s)?.classList.remove('stream-cursor'));
   showToast('Error: ' + msg);
   updateTopbarActions();
@@ -1089,4 +1123,3 @@ document.querySelectorAll('.modal-overlay').forEach(overlay => {
 // ── Boot ──────────────────────────────────────────────────────────────────────
 restoreWebviewState();
 vscode.postMessage({ command: 'ready' });
-vscode.postMessage({ command: 'getModels' });

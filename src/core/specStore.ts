@@ -35,9 +35,13 @@ export interface TaskItem {
 export interface TaskProgress {
   total: number;
   done: number;
-  items: Record<string, boolean>;
+  checked: number;
+  skipped: number;
+  items: Record<string, TaskSelectionState>;
   updatedAt: string;
 }
+
+export type TaskSelectionState = 'done' | 'checked' | 'empty';
 
 export interface TestQuestionnaire {
   badOutputDescription: string;
@@ -650,7 +654,28 @@ export function readTaskProgress(specsRoot: string, specName: string): TaskProgr
   const p = path.join(specsRoot, specName, PROGRESS_FILE);
   if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8')) as TaskProgress;
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8')) as {
+      total?: number;
+      done?: number;
+      checked?: number;
+      skipped?: number;
+      items?: Record<string, TaskSelectionState | boolean>;
+      updatedAt?: string;
+    };
+    const rawItems = parsed.items ?? {};
+    const normalizedItems: Record<string, TaskSelectionState> = {};
+    for (const [id, value] of Object.entries(rawItems)) {
+      normalizedItems[id] = normalizeTaskSelectionState(value);
+    }
+    const stats = computeTaskStats(normalizedItems);
+    return {
+      total: parsed.total ?? Object.keys(normalizedItems).length,
+      done: parsed.done ?? stats.done,
+      checked: parsed.checked ?? stats.checked,
+      skipped: parsed.skipped ?? stats.skipped,
+      items: normalizedItems,
+      updatedAt: parsed.updatedAt ?? new Date().toISOString(),
+    };
   } catch {
     return null;
   }
@@ -673,14 +698,21 @@ export function syncProgressFromMarkdown(
 ): TaskProgress {
   const items = parseTaskItems(tasksMarkdown);
   const existing = readTaskProgress(specsRoot, specName);
-  const itemMap: Record<string, boolean> = {};
+  const itemMap: Record<string, TaskSelectionState> = {};
   for (const item of items) {
-    itemMap[item.id] = existing?.items[item.id] ?? item.checked;
+    const existingState = existing?.items[item.id];
+    if (item.checked) {
+      itemMap[item.id] = 'done';
+      continue;
+    }
+    itemMap[item.id] = existingState ?? 'empty';
   }
-  const done = Object.values(itemMap).filter(Boolean).length;
+  const stats = computeTaskStats(itemMap);
   const progress: TaskProgress = {
     total: items.length,
-    done,
+    done: stats.done,
+    checked: stats.checked,
+    skipped: stats.skipped,
     items: itemMap,
     updatedAt: new Date().toISOString(),
   };
@@ -695,8 +727,52 @@ export function toggleTaskItem(
 ): TaskProgress | null {
   const progress = readTaskProgress(specsRoot, specName);
   if (!progress || !(taskId in progress.items)) return null;
-  progress.items[taskId] = !progress.items[taskId];
-  progress.done = Object.values(progress.items).filter(Boolean).length;
+  const current = progress.items[taskId];
+  if (current === 'done') return progress;
+  progress.items[taskId] = current === 'checked' ? 'empty' : 'checked';
+  const stats = computeTaskStats(progress.items);
+  progress.done = stats.done;
+  progress.checked = stats.checked;
+  progress.skipped = stats.skipped;
+  progress.updatedAt = new Date().toISOString();
+  writeTaskProgress(specsRoot, specName, progress);
+  return progress;
+}
+
+export function setTaskItemSelection(
+  specsRoot: string,
+  specName: string,
+  taskId: string,
+  state: 'checked' | 'empty'
+): TaskProgress | null {
+  const progress = readTaskProgress(specsRoot, specName);
+  if (!progress || !(taskId in progress.items)) return null;
+  if (progress.items[taskId] === 'done') return progress;
+  progress.items[taskId] = state;
+  const stats = computeTaskStats(progress.items);
+  progress.done = stats.done;
+  progress.checked = stats.checked;
+  progress.skipped = stats.skipped;
+  progress.updatedAt = new Date().toISOString();
+  writeTaskProgress(specsRoot, specName, progress);
+  return progress;
+}
+
+export function setAllTaskSelections(
+  specsRoot: string,
+  specName: string,
+  state: 'checked' | 'empty'
+): TaskProgress | null {
+  const progress = readTaskProgress(specsRoot, specName);
+  if (!progress) return null;
+  for (const id of Object.keys(progress.items)) {
+    if (progress.items[id] === 'done') continue;
+    progress.items[id] = state;
+  }
+  const stats = computeTaskStats(progress.items);
+  progress.done = stats.done;
+  progress.checked = stats.checked;
+  progress.skipped = stats.skipped;
   progress.updatedAt = new Date().toISOString();
   writeTaskProgress(specsRoot, specName, progress);
   return progress;
@@ -704,6 +780,27 @@ export function toggleTaskItem(
 
 function stableId(label: string, line: number): string {
   return `${label.slice(0, 32).replace(/\s+/g, '_').toLowerCase()}_${line}`;
+}
+
+function normalizeTaskSelectionState(value: TaskSelectionState | boolean | undefined): TaskSelectionState {
+  if (value === 'done' || value === 'checked' || value === 'empty') return value;
+  return value ? 'done' : 'empty';
+}
+
+function computeTaskStats(items: Record<string, TaskSelectionState>): {
+  done: number;
+  checked: number;
+  skipped: number;
+} {
+  let done = 0;
+  let checked = 0;
+  let skipped = 0;
+  for (const state of Object.values(items)) {
+    if (state === 'done') done += 1;
+    else if (state === 'checked') checked += 1;
+    else skipped += 1;
+  }
+  return { done, checked, skipped };
 }
 
 // ── Task completion detection (M8: Supervised Execution) ──────────────────

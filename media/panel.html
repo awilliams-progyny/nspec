@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-__NONCE__' __CSP_SOURCE__ https://cdn.jsdelivr.net; style-src 'unsafe-inline' __CSP_SOURCE__ https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com; img-src __CSP_SOURCE__ data:; connect-src https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com;"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>nSpec</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+<link rel="stylesheet" href="__PANEL_CSS_URI__">
+</head>
+<body>
+<div id="app">
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        nSpec
+      </div>
+    </div>
+    <div class="sidebar-search">
+      <input type="text" class="sidebar-search-input" id="sidebar-search" placeholder="Filter specs...">
+    </div>
+    <div class="specs-count" id="specs-count"></div>
+    <div class="specs-list" id="specs-list"></div>
+    <div class="sidebar-footer">
+      <button type="button" class="btn-new" id="btn-new-spec">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Spec
+      </button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="topbar">
+      <div class="topbar-main">
+        <div class="breadcrumb">
+          <span class="breadcrumb-spec" id="bc-spec">-</span>
+          <span class="bc-sep">></span>
+          <div class="stage-pills" id="stage-pills">
+            <div class="stage-pill" data-stage="requirements" id="pill-requirements">
+              <span class="pill-num">1</span> Requirements
+            </div>
+            <span class="bc-arrow">></span>
+            <div class="stage-pill" data-stage="design" id="pill-design">
+              <span class="pill-num">2</span> Design
+            </div>
+            <span class="bc-arrow">></span>
+            <div class="stage-pill" data-stage="tasks" id="pill-tasks">
+              <span class="pill-num">3</span> Task list
+            </div>
+            <span class="bc-arrow">></span>
+            <div class="stage-pill" data-stage="verify" id="pill-verify">
+              <span class="pill-num">4</span> Verify
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="topbar-actions-row">
+        <div class="topbar-actions" id="topbar-actions"></div>
+      </div>
+      <div class="topbar-stream-wrap" id="stage-stream-wrap" aria-live="polite">
+        <div class="topbar-stream-meta">
+          <span class="topbar-stream-label" id="stage-stream-label">Streaming...</span>
+          <span class="topbar-stream-pct" id="stage-stream-pct">0%</span>
+        </div>
+        <div class="topbar-stream-track">
+          <div class="topbar-stream-fill" id="stage-stream-bar" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="content">
+      <div id="welcome">
+        <div class="welcome-logo">nS</div>
+        <div class="welcome-title">Welcome to nSpec</div>
+        <div class="welcome-sub">Create AI-powered specs with Requirements, Design, and Task plans in seconds.</div>
+        <button type="button" class="btn-welcome" id="btn-welcome-new">Create your first spec</button>
+      </div>
+
+      <div class="stage-view" id="view-requirements">
+        <div class="md-area" id="area-requirements"><div class="md-rendered" id="md-requirements"></div><textarea class="edit-textarea" id="edit-requirements"></textarea></div>
+      </div>
+      <div class="stage-view" id="view-design">
+        <div class="md-area" id="area-design"><div class="md-rendered" id="md-design"></div><textarea class="edit-textarea" id="edit-design"></textarea></div>
+      </div>
+      <div class="stage-view" id="view-tasks">
+        <div id="tasks-progress-header" style="padding:12px 32px 0;display:none">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span class="progress-label" id="progress-label">0 / 0 tasks</span>
+            <span id="progress-pct" style="font-size:10px;color:var(--accent);font-weight:600">0%</span>
+          </div>
+          <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-bar" style="width:0%"></div></div>
+        </div>
+        <div class="md-area" id="area-tasks"><div class="md-rendered" id="md-tasks"></div><textarea class="edit-textarea" id="edit-tasks"></textarea></div>
+      </div>
+      <div class="stage-view" id="view-verify">
+        <div id="verify-score-header" class="verify-header" style="display:none">
+          <span id="health-badge" class="health-badge health-good">- / 100</span>
+          <span style="font-size:12px;color:var(--text-muted)" id="health-verdict"></span>
+        </div>
+        <div class="md-area" id="area-verify"><div class="md-rendered" id="md-verify"></div><textarea class="edit-textarea" id="edit-verify"></textarea></div>
+      </div>
+    </div>
+
+    <div class="refine-inline" id="refine-inline">
+      <input type="text" class="refine-input" id="refine-input" placeholder="Describe the change... (Enter to apply)">
+      <button class="btn-refine-send" id="btn-refine-send">Refine</button>
+      <button class="btn-refine-close" id="btn-refine-close" title="Close">x</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="modal-new">
+  <div class="modal wizard-modal">
+    <div class="wizard-pane active" id="wizard-pane-1">
+      <div class="modal-title">New Spec</div>
+      <div class="modal-field">
+        <label class="modal-label">Type</label>
+        <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-dim);transition:all .15s" class="spec-type-opt" data-type="feature">
+            <input type="radio" name="spec-type" value="feature" checked style="accent-color:var(--accent)"> Feature
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-dim);transition:all .15s" class="spec-type-opt" data-type="bugfix">
+            <input type="radio" name="spec-type" value="bugfix" style="accent-color:var(--accent)"> Bugfix
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;padding:5px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;font-size:12px;color:var(--text-dim);transition:all .15s" class="spec-type-opt" data-type="design-first">
+            <input type="radio" name="spec-type" value="design-first" style="accent-color:var(--accent)"> Design First
+          </label>
+        </div>
+      </div>
+      <div class="modal-field">
+        <label class="modal-label" for="new-spec-name">Name</label>
+        <input class="modal-input" id="new-spec-name" type="text" placeholder="e.g. User Authentication">
+      </div>
+      <div class="modal-field" id="jira-field">
+        <label class="modal-label" for="new-spec-jira">Jira URL or key <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+        <input class="modal-input" id="new-spec-jira" type="text" placeholder="https://your-org.atlassian.net/browse/PROJ-123 or PROJ-123">
+      </div>
+      <div class="modal-field">
+        <label class="modal-label" for="new-spec-prompt" id="prompt-label">Description</label>
+        <textarea class="modal-input" id="new-spec-prompt" rows="4" placeholder="Describe the feature, its purpose, key behaviors, and any constraints..."></textarea>
+      </div>
+      <div class="modal-field" id="template-field">
+        <label class="modal-label" for="new-spec-template">Template <span style="font-weight:400;color:var(--text-muted)">(optional)</span></label>
+        <select class="modal-input" id="new-spec-template" style="padding:7px 11px">
+          <option value="">No template - start blank</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-modal-cancel" id="btn-new-cancel">Cancel</button>
+        <button class="btn-modal-ok" id="btn-wiz-next-1">Generate -></button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="modal-delete">
+  <div class="modal">
+    <div class="modal-title">Delete spec?</div>
+    <div class="modal-sub" id="modal-delete-msg">This will permanently delete the spec and all its files.</div>
+    <div class="modal-actions">
+      <button class="btn-modal-cancel" id="btn-del-cancel">Cancel</button>
+      <button class="btn-modal-ok" style="background:var(--red)" id="btn-del-ok">Delete</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script nonce="__NONCE__" src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+<script nonce="__NONCE__" src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<script nonce="__NONCE__" src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<script nonce="__NONCE__" src="__PANEL_JS_URI__"></script>
+</body>
+</html>

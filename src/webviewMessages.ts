@@ -49,6 +49,8 @@ export type ToExtensionMessage =
   | { command: 'pickModelFromPalette' }
   | { command: 'generateVerify' }
   | { command: 'toggleTask'; taskId: string }
+  | { command: 'setTaskState'; taskId: string; state: 'checked' | 'empty' }
+  | { command: 'setAllTasksState'; state: 'checked' | 'empty' }
   | { command: 'scaffoldPrompts' }
   | { command: 'cancelGeneration' }
   | { command: 'getModels' }

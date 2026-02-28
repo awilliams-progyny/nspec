@@ -9,6 +9,7 @@ export type {
   SpecInfo,
   TaskItem,
   TaskProgress,
+  TaskSelectionState,
   TestQuestionnaire,
   SpecConfig,
   SpecType,
@@ -157,6 +158,25 @@ export function toggleTaskItem(specName: string, taskId: string): store.TaskProg
   const root = getSpecsRoot();
   if (!root) return null;
   return store.toggleTaskItem(root, specName, taskId);
+}
+
+export function setTaskItemSelection(
+  specName: string,
+  taskId: string,
+  state: 'checked' | 'empty'
+): store.TaskProgress | null {
+  const root = getSpecsRoot();
+  if (!root) return null;
+  return store.setTaskItemSelection(root, specName, taskId, state);
+}
+
+export function setAllTaskSelections(
+  specName: string,
+  state: 'checked' | 'empty'
+): store.TaskProgress | null {
+  const root = getSpecsRoot();
+  if (!root) return null;
+  return store.setAllTaskSelections(root, specName, state);
 }
 
 // ── Workspace context & steering ──────────────────────────────────────────────

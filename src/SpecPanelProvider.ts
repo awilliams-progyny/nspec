@@ -522,7 +522,7 @@ export class SpecPanelProvider {
     template?: string
   ) {
     if (!(await this.ensureWorkspaceOpen())) return;
-    let effectivePrompt = prompt?.trim() || '';
+    const effectivePrompt = prompt?.trim() || '';
 
     if (!specName?.trim()) {
       vscode.window.showWarningMessage('nSpec: Enter a spec name.');

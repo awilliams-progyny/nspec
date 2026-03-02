@@ -433,7 +433,7 @@ export class SpecPanelProvider {
           break;
 
         case 'setRequirementsFormat':
-          this.handleSetRequirementsFormat(msg.format);
+          await this.handleSetRequirementsFormat(msg.format);
           break;
 
         case 'cancelTaskRun':
@@ -700,12 +700,19 @@ export class SpecPanelProvider {
     await this.streamGenerate('requirements', userPrompt, specName);
   }
 
-  private handleSetRequirementsFormat(format: 'given-when-then' | 'ears') {
+  private async handleSetRequirementsFormat(format: 'given-when-then' | 'ears') {
     if (!this.state.activeSpec) return;
     const cfg = specManager.readConfig(this.state.activeSpec);
     if (!cfg) return;
+
     specManager.writeSpecConfig(this.state.activeSpec, { ...cfg, requirementsFormat: format });
     this.postMessage({ type: 'requirementsFormatChanged', format });
+
+    // Immediately regenerate requirements so the selected format is applied to content.
+    if (!this.state.generating && this.state.contents.requirements?.trim()) {
+      this.state.activeStage = 'requirements';
+      await this.handleGenerateRequirements();
+    }
   }
 
   /** Import from file: show dialog, optionally transform with AI, then write stage (D5). */

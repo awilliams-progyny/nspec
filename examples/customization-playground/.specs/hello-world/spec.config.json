@@ -1,0 +1,6 @@
+{
+  "name": "hello-world",
+  "mode": "requirements-first",
+  "createdAt": "2026-03-01T00:00:00.000Z",
+  "requirementsFormat": "given-when-then"
+}

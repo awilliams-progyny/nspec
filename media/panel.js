@@ -12,6 +12,8 @@ let state = {
   requirementsFormat: 'given-when-then',
 };
 let streamBuffer = { requirements: '', design: '', tasks: '', verify: '' };
+let streamRenderBuffer = { requirements: '', design: '', tasks: '', verify: '' };
+let streamPendingBuffer = { requirements: '', design: '', tasks: '', verify: '' };
 let streamFramePending = { requirements: false, design: false, tasks: false, verify: false };
 let pendingDelete = null;
 const STAGES = ['requirements', 'design', 'tasks', 'verify'];
@@ -71,7 +73,11 @@ window.addEventListener('message', e => {
     case 'usingCustomPrompt': showToast(`Using custom prompt for ${msg.stage}`); break;
     case 'promptsScaffolded': state.hasCustomPrompts = true; updateBreadcrumb(); break;
     case 'specRenamed': handleSpecRenamed(msg); break;
-    case 'requirementsFormatChanged': state.requirementsFormat = msg.format || 'given-when-then'; showToast(msg.format === 'ears' ? 'Requirements format: EARS' : 'Requirements format: Given/When/Then'); break;
+    case 'requirementsFormatChanged':
+      state.requirementsFormat = msg.format || 'given-when-then';
+      showToast(msg.format === 'ears' ? 'Requirements format: EARS' : 'Requirements format: Given/When/Then');
+      updateTopbarActions();
+      break;
   }
 });
 
@@ -164,6 +170,8 @@ function handleStreamStart(msg) {
   isRefineStream = !!msg.isRefine;
   startStageStreamProgress(msg.stage);
   streamBuffer[msg.stage] = '';
+  streamRenderBuffer[msg.stage] = '';
+  streamPendingBuffer[msg.stage] = '';
   streamFramePending[msg.stage] = false;
   const el = document.getElementById('md-' + msg.stage);
   if (el) { el.innerHTML = ''; el.classList.add('stream-cursor'); }
@@ -173,6 +181,7 @@ function handleStreamStart(msg) {
 
 function handleStreamChunk(msg) {
   streamBuffer[msg.stage] += msg.chunk;
+  streamPendingBuffer[msg.stage] += msg.chunk;
   bumpStageStreamProgress(msg.stage);
   scheduleStreamRender(msg.stage);
 }
@@ -181,6 +190,8 @@ function handleInquiryDone(msg) {
   state.generating = false;
   completeStageStreamProgress(msg.stage, false);
   streamBuffer[msg.stage] = '';
+  streamRenderBuffer[msg.stage] = '';
+  streamPendingBuffer[msg.stage] = '';
   // Restore the original document content (streamStart cleared it)
   const el = document.getElementById('md-' + msg.stage);
   if (el) {
@@ -202,6 +213,8 @@ function handleStreamDone(msg) {
   completeStageStreamProgress(msg.stage, false);
   state.contents[msg.stage] = msg.content;
   streamBuffer[msg.stage] = '';
+  streamRenderBuffer[msg.stage] = '';
+  streamPendingBuffer[msg.stage] = '';
   const el = document.getElementById('md-' + msg.stage);
   if (el) {
     el.classList.remove('stream-cursor');
@@ -244,11 +257,24 @@ function scheduleStreamRender(stage) {
   streamFramePending[stage] = true;
   requestAnimationFrame(() => {
     streamFramePending[stage] = false;
+
+    const pending = streamPendingBuffer[stage];
+    if (!pending) return;
+
+    const take = Math.max(36, Math.min(420, Math.ceil(pending.length * 0.42)));
+    streamRenderBuffer[stage] += pending.slice(0, take);
+    streamPendingBuffer[stage] = pending.slice(take);
+
     const el = document.getElementById('md-' + stage);
     if (!el) return;
-    el.innerHTML = renderStreamingPreview(streamBuffer[stage]);
+
+    el.innerHTML = renderStreamingPreview(streamRenderBuffer[stage]);
     const area = el.closest('.md-area');
     if (area) area.scrollTop = area.scrollHeight;
+
+    if (streamPendingBuffer[stage].length > 0) {
+      scheduleStreamRender(stage);
+    }
   });
 }
 
@@ -549,7 +575,11 @@ function wireTaskCheckboxes() {
 
 function updateTopbarActions() {
   const container = document.getElementById('topbar-actions');
-  if (!container || !state.activeSpec) { if(container) container.innerHTML=''; return; }
+  if (!container || !state.activeSpec) {
+    if (container) container.innerHTML = '';
+    return;
+  }
+
   const stage = state.activeStage;
   const hasContent = !!state.contents[stage];
   const hasReq = !!state.contents.requirements;
@@ -557,66 +587,103 @@ function updateTopbarActions() {
   const hasTasks = !!state.contents.tasks;
   const hasVerify = !!state.contents.verify;
   const gen = state.generating;
-  let html = '';
 
   if (gen) {
-    html = `<div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px">
+    container.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px">
       <div class="spinner accent"></div>Generating…
       <button class="btn-action" style="margin-left:4px" id="btn-cancel">Cancel</button>
     </div>`;
-    container.innerHTML = html;
-    container.querySelector('#btn-cancel')?.addEventListener('click', () => vscode.postMessage({ command: 'cancelGeneration' }));
+    container.querySelector('#btn-cancel')?.addEventListener('click', () =>
+      vscode.postMessage({ command: 'cancelGeneration' })
+    );
     return;
   }
 
-  // Primary actions
-  if (stage === 'requirements' && hasReq) {
-    html += `<button class="btn-action primary" id="btn-gen-design">Generate Design →</button>`;
+  const parts = [];
+
+  if (stage === 'requirements') {
+    if (hasReq) {
+      parts.push('<button class="btn-action primary" id="btn-gen-design">Generate Design →</button>');
+    } else {
+      parts.push('<button class="btn-action primary" id="btn-gen-req">Generate Requirements</button>');
+    }
+
+    const currentFormat = state.requirementsFormat === 'ears' ? 'EARS' : 'GWT';
+    parts.push(`<button class="btn-action format" id="btn-toggle-req-format" title="Toggle requirements format and regenerate">Format: ${currentFormat}</button>`);
   }
+
   if (stage === 'design') {
-    if (!hasDes && hasReq) html += `<button class="btn-action primary" id="btn-gen-design">Generate Design</button>`;
-    if (hasDes) html += `<button class="btn-action primary" id="btn-gen-tasks">Generate Tasks →</button>`;
+    if (!hasDes && hasReq) parts.push('<button class="btn-action primary" id="btn-gen-design">Generate Design</button>');
+    if (hasDes) parts.push('<button class="btn-action primary" id="btn-gen-tasks">Generate Tasks →</button>');
   }
+
   if (stage === 'tasks') {
-    if (!hasTasks && hasDes) html += `<button class="btn-action primary" id="btn-gen-tasks">Generate Tasks</button>`;
+    if (!hasTasks && hasDes) {
+      parts.push('<button class="btn-action primary" id="btn-gen-tasks">Generate Tasks</button>');
+    }
+
     if (hasTasks) {
       const total = state.progress?.total || 0;
       const done = state.progress?.done || 0;
       const checked = state.progress?.checked || 0;
       const selectable = Math.max(total - done, 0);
-      html += `<button class="btn-action run" id="btn-run-tasks">
+
+      parts.push(`<button class="btn-action run" id="btn-run-tasks">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         Run checked
-      </button>`;
-      html += `<button class="btn-action" id="btn-select-all" ${checked >= selectable ? 'disabled' : ''}>Select all</button>`;
-      html += `<button class="btn-action" id="btn-clear-all" ${checked === 0 ? 'disabled' : ''}>Clear</button>`;
-      html += `<button class="btn-action primary" id="btn-gen-verify" style="background:var(--yellow);border-color:var(--yellow);color:#1e1e2e">Verify →</button>`;
+      </button>`);
+      parts.push(`<button class="btn-action" id="btn-select-all" ${checked >= selectable ? 'disabled' : ''}>Select all</button>`);
+      parts.push(`<button class="btn-action" id="btn-clear-all" ${checked === 0 ? 'disabled' : ''}>Clear</button>`);
+      parts.push('<button class="btn-action primary" id="btn-gen-verify" style="background:var(--yellow);border-color:var(--yellow);color:#1e1e2e">Verify →</button>');
     }
   }
+
   if (stage === 'verify') {
-    if (!hasVerify && hasTasks) html += `<button class="btn-action primary" id="btn-gen-verify">Run Verification</button>`;
-    if (hasVerify) html += `<button class="btn-action" id="btn-gen-verify">Re-verify</button>`;
+    if (!hasVerify && hasTasks) parts.push('<button class="btn-action primary" id="btn-gen-verify">Run Verification</button>');
+    if (hasVerify) parts.push('<button class="btn-action" id="btn-gen-verify">Re-verify</button>');
   }
 
-  // Secondary actions are grouped in a "More" menu to avoid crowding.
-  html += `<button class="btn-action" id="btn-actions-menu" title="More actions">
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-    More
-  </button>`;
+  if (hasContent) {
+    parts.push(`<button class="btn-action icon" id="btn-refine" title="Refine ${stage}">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15.3-6.36L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15.3 6.36L3 16"/></svg>
+    </button>`);
+    parts.push(`<button class="btn-action icon" id="btn-toggle-edit" title="${state.editMode ? 'Switch to preview mode' : 'Switch to edit mode'}">
+      ${state.editMode
+        ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>'
+        : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'}
+    </button>`);
+  }
 
-  container.innerHTML = html;
+  container.innerHTML = parts.join('');
 
-  // Wire up buttons
-  container.querySelector('#btn-gen-design')?.addEventListener('click', () => vscode.postMessage({ command: 'generateDesign' }));
-  container.querySelector('#btn-gen-tasks')?.addEventListener('click', () => vscode.postMessage({ command: 'generateTasks' }));
-  container.querySelector('#btn-run-tasks')?.addEventListener('click', () => vscode.postMessage({ command: 'runAllTasks' }));
-  container.querySelector('#btn-select-all')?.addEventListener('click', () => vscode.postMessage({ command: 'setAllTasksState', state: 'checked' }));
-  container.querySelector('#btn-clear-all')?.addEventListener('click', () => vscode.postMessage({ command: 'setAllTasksState', state: 'empty' }));
+  container.querySelector('#btn-gen-req')?.addEventListener('click', () =>
+    vscode.postMessage({ command: 'generateRequirements' })
+  );
+  container.querySelector('#btn-gen-design')?.addEventListener('click', () =>
+    vscode.postMessage({ command: 'generateDesign' })
+  );
+  container.querySelector('#btn-gen-tasks')?.addEventListener('click', () =>
+    vscode.postMessage({ command: 'generateTasks' })
+  );
+  container.querySelector('#btn-run-tasks')?.addEventListener('click', () =>
+    vscode.postMessage({ command: 'runAllTasks' })
+  );
+  container.querySelector('#btn-select-all')?.addEventListener('click', () =>
+    vscode.postMessage({ command: 'setAllTasksState', state: 'checked' })
+  );
+  container.querySelector('#btn-clear-all')?.addEventListener('click', () =>
+    vscode.postMessage({ command: 'setAllTasksState', state: 'empty' })
+  );
   container.querySelector('#btn-gen-verify')?.addEventListener('click', () => {
     setActiveStage('verify');
     vscode.postMessage({ command: 'generateVerify' });
   });
-  container.querySelector('#btn-actions-menu')?.addEventListener('click', () => openActionsMenu(stage, hasContent));
+  container.querySelector('#btn-refine')?.addEventListener('click', () => openRefineInline());
+  container.querySelector('#btn-toggle-edit')?.addEventListener('click', () => toggleEditMode());
+  container.querySelector('#btn-toggle-req-format')?.addEventListener('click', () => {
+    const next = state.requirementsFormat === 'ears' ? 'given-when-then' : 'ears';
+    vscode.postMessage({ command: 'setRequirementsFormat', format: next });
+  });
 }
 
 function stableTaskId(label, line) {
@@ -800,107 +867,7 @@ document.getElementById('refine-input')?.addEventListener('keydown', e => {
   if (e.key === 'Escape') closeRefineInline();
 });
 
-// ── Cascade dropdown (Deliverable E) ──────────────────────────────────────────
-function openActionsMenu(stage, hasContent) {
-  const existing = document.getElementById('actions-dd');
-  if (existing) { existing.remove(); return; }
-
-  const btn = document.getElementById('btn-actions-menu');
-  if (!btn) return;
-  const rect = btn.getBoundingClientRect();
-
-  const dd = document.createElement('div');
-  dd.id = 'actions-dd';
-  dd.className = 'cascade-dropdown';
-  dd.style.cssText = `top:${rect.bottom+4}px;right:${window.innerWidth - rect.right}px`;
-
-  const editIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
-  const previewIcon = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
-  const items = [];
-  if (hasContent) {
-    items.push(`<div class="cascade-dropdown-item" data-action="toggle-edit">${state.editMode ? previewIcon + ' Preview mode' : editIcon + ' Edit mode'}</div>`);
-    items.push('<div class="cascade-dropdown-item" data-action="refine">Refine current stage</div>');
-  }
-  items.push('<div class="cascade-dropdown-item" data-action="import">Import content</div>');
-  if (stage !== 'verify') {
-    items.push('<div class="cascade-dropdown-item" data-action="cascade">Cascade options</div>');
-  }
-  if (stage === 'requirements') {
-    items.push(`<div class="cascade-dropdown-item" data-action="format-gwt">Requirements format: Given/When/Then${state.requirementsFormat === 'given-when-then' ? ' ✓' : ''}</div>`);
-    items.push(`<div class="cascade-dropdown-item" data-action="format-ears">Requirements format: EARS${state.requirementsFormat === 'ears' ? ' ✓' : ''}</div>`);
-  }
-  dd.innerHTML = items.join('');
-
-  dd.querySelectorAll('.cascade-dropdown-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const action = item.dataset.action;
-      dd.remove();
-      if (action === 'toggle-edit') toggleEditMode();
-      else if (action === 'refine') openRefineInline();
-      else if (action === 'import') vscode.postMessage({ command: 'importFromFile' });
-      else if (action === 'cascade') openCascadeDropdown(btn);
-      else if (action === 'format-gwt') vscode.postMessage({ command: 'setRequirementsFormat', format: 'given-when-then' });
-      else if (action === 'format-ears') vscode.postMessage({ command: 'setRequirementsFormat', format: 'ears' });
-    });
-  });
-
-  document.body.appendChild(dd);
-  setTimeout(() => document.addEventListener('click', function handler(e) {
-    if (!dd.contains(e.target) && e.target !== btn) { dd.remove(); document.removeEventListener('click', handler); }
-  }), 10);
-}
-
-function openCascadeDropdown(anchorEl) {
-  const existing = document.getElementById('cascade-dd');
-  if (existing) { existing.remove(); return; }
-
-  const btn = anchorEl || document.getElementById('btn-cascade-open');
-  if (!btn) return;
-  const rect = btn.getBoundingClientRect();
-
-  const dd = document.createElement('div');
-  dd.id = 'cascade-dd';
-  dd.className = 'cascade-dropdown';
-  dd.style.cssText = `top:${rect.bottom+4}px;right:${window.innerWidth - rect.right}px`;
-
-  const stage = state.activeStage;
-  let items = '';
-  items += `<div class="cascade-dropdown-item" data-action="from-current">
-    <div>From ${stage} → verify</div>
-    <div class="cd-desc">Generate all downstream stages</div>
-  </div>`;
-  items += `<div class="cascade-dropdown-item" data-action="regen-current">
-    <div>Regenerate ${stage}</div>
-    <div class="cd-desc">Regenerate the current stage</div>
-  </div>`;
-  items += `<div class="cascade-dropdown-item" data-action="full-pipeline">
-    <div>Full pipeline</div>
-    <div class="cd-desc">Regenerate all stages from requirements</div>
-  </div>`;
-  dd.innerHTML = items;
-
-  dd.querySelectorAll('.cascade-dropdown-item').forEach(item => {
-    item.addEventListener('click', () => {
-      const action = item.dataset.action;
-      dd.remove();
-      if (action === 'from-current') {
-        vscode.postMessage({ command: 'cascadeFromStage', fromStage: stage });
-      } else if (action === 'regen-current') {
-        if (stage === 'requirements') vscode.postMessage({ command: 'generateRequirements' });
-        else if (stage === 'design') vscode.postMessage({ command: 'generateDesign' });
-        else if (stage === 'tasks') vscode.postMessage({ command: 'generateTasks' });
-        else if (stage === 'verify') vscode.postMessage({ command: 'generateVerify' });
-      } else if (action === 'full-pipeline') {
-        vscode.postMessage({ command: 'cascadeFromStage', fromStage: 'design' });
-      }
-    });
-  });
-
-  document.body.appendChild(dd);
-  setTimeout(() => document.addEventListener('click', function handler(e) {
-    if (!dd.contains(e.target)) { dd.remove(); document.removeEventListener('click', handler); }
-  }), 10);
-}
+// ── Secondary actions removed from overflow menu to keep controls explicit.
 
 // ── Spec rename (Deliverable G) ───────────────────────────────────────────────
 function handleSpecRenamed(msg) {

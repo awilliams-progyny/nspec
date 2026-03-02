@@ -84,6 +84,10 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Inter'
 .btn-action.primary:hover{background:var(--accent-hover)}
 .btn-action.run{background:var(--green-dim);border-color:var(--green);color:var(--green)}
 .btn-action.run:hover{background:#a6e3a133}
+.btn-action.format{background:var(--surface3);border-color:var(--border-focus);color:var(--text)}
+.btn-action.format:hover{border-color:var(--accent);color:var(--accent)}
+.btn-action.icon{width:30px;height:30px;justify-content:center;padding:0;color:var(--text-muted)}
+.btn-action.icon:hover{color:var(--text)}
 .btn-action:disabled{opacity:.4;cursor:not-allowed}
 .btn-action:disabled:hover{border-color:var(--border);color:var(--text)}
 .topbar-stream-wrap{display:none;gap:6px}

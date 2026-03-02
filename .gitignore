@@ -27,3 +27,6 @@ Thumbs.db
 
 # Cursor IDE workspace files (excluded from VSIX already; keep out of git too)
 .cursor/
+.vscode-test/*
+
+milestones/*

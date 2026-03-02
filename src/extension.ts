@@ -2,14 +2,36 @@ import * as vscode from 'vscode';
 import { SpecPanelProvider } from './SpecPanelProvider';
 import { loadHooks, scaffoldExamples } from './core/specStore';
 import { runMatchingHooks, HookTrigger } from './core/hooks';
-import { registerChatParticipant } from './chatParticipant';
 import { getSpecsRoot, getWorkspaceRoot } from './workspace';
 
 let provider: SpecPanelProvider | undefined;
 let hooksOutputChannel: vscode.OutputChannel | undefined;
+let activationOutputChannel: vscode.OutputChannel | undefined;
+
+function logActivation(message: string, err?: unknown) {
+  const ts = new Date().toISOString();
+  const suffix =
+    err === undefined
+      ? ''
+      : ' :: ' + (err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err));
+  activationOutputChannel?.appendLine(`[${ts}] ${message}${suffix}`);
+}
 
 export function activate(context: vscode.ExtensionContext) {
-  provider = new SpecPanelProvider(context);
+  activationOutputChannel = vscode.window.createOutputChannel('nSpec');
+  context.subscriptions.push(activationOutputChannel);
+  logActivation('Activation started');
+
+  try {
+    provider = new SpecPanelProvider(context);
+    logActivation('SpecPanelProvider initialized');
+  } catch (err) {
+    logActivation('Activation failed during provider initialization', err);
+    vscode.window.showErrorMessage(
+      'nSpec: Failed to initialize extension. Check Output -> nSpec for details.'
+    );
+    return;
+  }
 
   const runCommand = async (label: string, fn: () => void | Promise<void>) => {
     try {
@@ -67,20 +89,141 @@ export function activate(context: vscode.ExtensionContext) {
         provider!.show();
         provider!.checkTasksCommand();
       });
+    }),
+
+    vscode.commands.registerCommand('nspec.validateSetup', () => {
+      void runCommand('Validate setup', async () => {
+        await validateSetup();
+      });
     })
   );
 
-  // ── @nspec chat participant (Copilot / Codex chat integration) ────────
-  registerChatParticipant(context);
+  try {
+    setupFileWatcher(context);
+    logActivation('File watcher ready');
+  } catch (err) {
+    logActivation('File watcher setup failed', err);
+    vscode.window.showWarningMessage(
+      'nSpec: File watcher disabled due to setup error. Check Output -> nSpec.'
+    );
+  }
 
-  // ── File watcher: auto-refresh panel when .specs/ changes externally ──────
-  setupFileWatcher(context);
+  try {
+    setupHooksWatcher(context);
+    logActivation('Hooks watcher ready');
+  } catch (err) {
+    logActivation('Hooks watcher setup failed', err);
+    vscode.window.showWarningMessage(
+      'nSpec: Hooks watcher disabled due to setup error. Check Output -> nSpec.'
+    );
+  }
 
-  // ── Hooks: file-save triggered automations ────────────────────────────────
-  setupHooksWatcher(context);
+  void promptExamplesIfNew().catch((err) => {
+    logActivation('Examples prompt failed', err);
+  });
 
-  // ── Examples prompt: offer example customization files on first use ────────
-  promptExamplesIfNew();
+  logActivation('Activation complete');
+}
+
+async function validateSetup() {
+  const cfg = vscode.workspace.getConfiguration('nspec');
+  const workspaceCount = vscode.workspace.workspaceFolders?.length ?? 0;
+  const specsRoot = getSpecsRoot();
+  const apiKey = cfg.get<string>('apiKey', '').trim();
+  const allCommands = new Set(await vscode.commands.getCommands(true));
+
+  const expectedNspecCommands = [
+    'nspec.open',
+    'nspec.newSpec',
+    'nspec.pickModel',
+    'nspec.setupSteering',
+    'nspec.vibeToSpec',
+    'nspec.scaffoldPrompts',
+    'nspec.checkTasks',
+    'nspec.validateSetup',
+  ];
+
+  const missingNspecCommands = expectedNspecCommands.filter((cmd) => !allCommands.has(cmd));
+  const codexCommands = Array.from(allCommands)
+    .filter((cmd) => cmd.toLowerCase().startsWith('codex.'))
+    .sort();
+
+  const report: string[] = [];
+  report.push('nSpec Setup Validation');
+  report.push('----------------------');
+  report.push(`Workspace folders: ${workspaceCount > 0 ? workspaceCount : 'none'}`);
+  report.push(`Specs folder: ${specsRoot ?? '(no workspace open)'}`);
+  report.push(`API key configured: ${apiKey ? 'yes' : 'no'}`);
+  report.push(`nSpec commands registered: ${expectedNspecCommands.length - missingNspecCommands.length}/${expectedNspecCommands.length}`);
+  report.push(`Codex commands detected: ${codexCommands.length}`);
+  if (codexCommands.length > 0) {
+    report.push('Codex command sample: ' + codexCommands.slice(0, 8).join(', '));
+  }
+  if (missingNspecCommands.length > 0) {
+    report.push('Missing nSpec commands: ' + missingNspecCommands.join(', '));
+  }
+
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  if (workspaceCount === 0) {
+    warnings.push('No workspace folder is open.');
+  }
+  if (missingNspecCommands.length > 0) {
+    errors.push('Some nSpec commands were not registered.');
+  }
+  if (codexCommands.length === 0) {
+    warnings.push('No Codex commands detected. Run checked will not start Codex.');
+  }
+  if (!apiKey) {
+    warnings.push('No nspec.apiKey is configured.');
+  }
+
+  report.push('');
+  if (errors.length > 0) {
+    report.push('Errors:');
+    for (const err of errors) report.push(`- ${err}`);
+  }
+  if (warnings.length > 0) {
+    report.push('Warnings:');
+    for (const warn of warnings) report.push(`- ${warn}`);
+  }
+  if (errors.length === 0 && warnings.length === 0) {
+    report.push('Status: OK');
+  } else if (errors.length === 0) {
+    report.push('Status: WARN');
+  } else {
+    report.push('Status: FAIL');
+  }
+
+  for (const line of report) {
+    activationOutputChannel?.appendLine(line);
+  }
+  activationOutputChannel?.show(true);
+
+  const actionLabel = 'Open nSpec Output';
+  if (errors.length > 0) {
+    const choice = await vscode.window.showErrorMessage(
+      'nSpec: Setup validation failed. Check Output -> nSpec for details.',
+      actionLabel
+    );
+    if (choice === actionLabel) activationOutputChannel?.show(true);
+    return;
+  }
+
+  if (warnings.length > 0) {
+    const choice = await vscode.window.showWarningMessage(
+      'nSpec: Setup validation completed with warnings. Check Output -> nSpec.',
+      actionLabel
+    );
+    if (choice === actionLabel) activationOutputChannel?.show(true);
+    return;
+  }
+
+  const choice = await vscode.window.showInformationMessage(
+    'nSpec: Setup validation passed.',
+    actionLabel
+  );
+  if (choice === actionLabel) activationOutputChannel?.show(true);
 }
 
 async function promptExamplesIfNew() {
@@ -116,18 +259,18 @@ async function promptExamplesIfNew() {
 }
 
 function setupFileWatcher(context: vscode.ExtensionContext) {
+  const wsFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!wsFolder) {
+    logActivation('Skipping file watcher: no workspace folder');
+    return;
+  }
+
   const config = vscode.workspace.getConfiguration('nspec');
   const specsFolder = config.get<string>('specsFolder', '.specs');
 
   // Watch markdown and JSON files inside the specs folder
-  const mdPattern = new vscode.RelativePattern(
-    vscode.workspace.workspaceFolders?.[0] ?? '',
-    `${specsFolder}/**/*.md`
-  );
-  const jsonPattern = new vscode.RelativePattern(
-    vscode.workspace.workspaceFolders?.[0] ?? '',
-    `${specsFolder}/**/*.json`
-  );
+  const mdPattern = new vscode.RelativePattern(wsFolder, `${specsFolder}/**/*.md`);
+  const jsonPattern = new vscode.RelativePattern(wsFolder, `${specsFolder}/**/*.json`);
 
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -236,4 +379,5 @@ async function triggerHooks(
 export function deactivate() {
   provider = undefined;
   hooksOutputChannel = undefined;
+  activationOutputChannel = undefined;
 }

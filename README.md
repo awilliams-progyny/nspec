@@ -89,6 +89,17 @@ Install the `.vsix` via **Extensions → ⋯ → Install from VSIX**.
 
 ---
 
+## Customization Guides
+
+Prefer example-first customization before tuning workflows.
+
+- **Prompt system and precedence:** [readMe/PROMPTS.md](readMe/PROMPTS.md)
+- **Example usage cookbook:** [readMe/EXAMPLE-USAGES.md](readMe/EXAMPLE-USAGES.md)
+- **Taxonomy and responsibilities:** [readMe/SPEC-TAXONOMY.md](readMe/SPEC-TAXONOMY.md)
+- **Playground examples:** [examples/customization-playground/README.md](examples/customization-playground/README.md)
+
+---
+
 ## CLI
 
 The CLI is designed for agent-driven workflows (Codex, scripts). It reads `NSPEC_API_KEY` from the environment.
@@ -125,25 +136,11 @@ node bin/nspec.mjs import <name> <stage> <file> \
 
 ## Agent integration
 
-### OpenAI Codex
+### Codex supervised execution
 
-Use the `@nspec` chat participant in VS Code chat with Codex:
+In the Tasks stage, use **Run checked** or **Run all tasks (supervised)** to send task implementation prompts to Codex.
 
-| Command | What it does |
-|---------|-------------|
-| `@nspec /spec <name>` | Generate a spec from the chat conversation |
-| `@nspec /status [name]` | Show spec status |
-| `@nspec /refine <name> <stage>` | Refine a spec stage |
-| `@nspec /context <name>` | Inject a spec's full content as chat context |
-
-Requires `nspec.apiKey` set to your OpenAI key.
-
-**Cross-referencing a spec in chat:**  
-Type `spec:<name>` or `#spec:<name>` anywhere in a Codex chat message to inject the spec's requirements, design, and tasks as context:
-
-```
-Implement task 3 from spec:user-auth
-```
+If Codex commands are unavailable in the current VS Code/Cursor session, nSpec now shows a clear error with recovery actions (open extensions or reload window).
 
 ---
 
@@ -175,7 +172,7 @@ Each spec lives in `.specs/<name>/`:
 │   ├── verify.md            # Health score (0–100), coverage matrix, gap report
 │   ├── _progress.json       # Task completion state (survives regeneration)
 │   ├── _steering.md         # (optional) Domain context for this spec
-│   ├── _role.md             # (optional) Override the AI role
+│   ├── _role.md             # (optional, legacy) Role override (prefer steering skills)
 │   └── _prompts/            # (optional) Full prompt overrides per stage
 ├── steering/                # Workspace-wide steering (product.md, tech.md, etc.)
 └── _prompts/                # Workspace-wide prompt overrides
@@ -193,7 +190,7 @@ Override AI behaviour at any granularity without touching source code.
 | `.specs/_prompts/<stage>.md` | All specs | Replace the system prompt for a stage workspace-wide |
 | `.specs/<name>/_steering.md` | One spec | Domain context for a specific spec |
 | `.specs/<name>/_prompts/<stage>.md` | One spec | Replace the system prompt for one stage |
-| `.specs/<name>/_role.md` | One spec | Change the AI persona |
+| `.specs/<name>/_role.md` | One spec | Legacy role fallback (prefer steering skills) |
 
 Run **nSpec: Setup Steering Files** to auto-generate `product.md`, `tech.md`, and `structure.md` from your workspace.
 
@@ -225,6 +222,9 @@ Run **nSpec: Setup Steering Files** to auto-generate `product.md`, `tech.md`, an
 ## Docs
 
 - **CLI and agent usage:** [AGENTS.md](AGENTS.md)
-- **Prompt system:** [PROMPTS.md](PROMPTS.md)
+- **Prompt system:** [readMe/PROMPTS.md](readMe/PROMPTS.md)
+- **Example usages:** [readMe/EXAMPLE-USAGES.md](readMe/EXAMPLE-USAGES.md)
+- **Spec taxonomy:** [readMe/SPEC-TAXONOMY.md](readMe/SPEC-TAXONOMY.md)
+- **Customization playground:** [examples/customization-playground/README.md](examples/customization-playground/README.md)
 - **Contributing:** [CONTRIBUTING.md](CONTRIBUTING.md)
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)

@@ -17,9 +17,6 @@ webpack.config.js
 vsc-extension-quickstart.md
 .yarnrc
 
-# Dependencies
-node_modules/**
-
 # Tests and harness
 test/**
 test-workspace/**

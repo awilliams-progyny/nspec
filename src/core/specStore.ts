@@ -124,7 +124,7 @@ export function scaffoldCustomPrompts(specsRoot: string, specName: string): void
 /**
  * Writes a tree of annotated example files into .specs/examples/.
  * Shows users how to customize nSpec behavior using steering files,
- * role overrides and prompt overrides — without touching
+ * legacy role overrides and prompt overrides — without touching
  * any live spec data.
  */
 export function scaffoldExamples(specsRoot: string): string[] {
@@ -168,7 +168,7 @@ Add as many as you like — they are loaded alphabetically.
 | Example file | Copy to |
 |---|---|
 | \`per-spec/_steering.md\` | \`.specs/<name>/_steering.md\` |
-| \`per-spec/_role.md\` | \`.specs/<name>/_role.md\` |
+| \`per-spec/_role.md\` | \`.specs/<name>/_role.md\` (legacy fallback) |
 | \`per-spec/_prompts/requirements.md\` | \`.specs/<name>/_prompts/requirements.md\` |
 
 Replace \`<name>\` with your spec's folder name (e.g. \`user-auth\`).
@@ -268,8 +268,8 @@ This spec covers the **billing module**.
     path.join(perSpecDir, '_role.md'),
     `# AI Role Override
 <!-- Copy this file to .specs/<name>/_role.md -->
-<!-- Replaces the default "senior software engineer" persona for this spec. -->
-<!-- Useful for domain-specific voice (e.g. security, data science, mobile). -->
+<!-- Legacy fallback: use this only when steering files are not enough. -->
+<!-- Replaces the default role preamble for this spec. -->
 
 You are a senior security engineer with 10 years of experience in payment systems
 and PCI-DSS compliance. You write precise, threat-modeled requirements and flag
@@ -448,28 +448,28 @@ export function scaffoldTemplate(specsRoot: string, specName: string, templateId
 
   const specDir = path.join(specsRoot, specName);
 
-  // Write _steering.md with domain context
-  const steeringContent = `# ${template.name} Spec\n\nThis spec uses the **${template.name}** template (${template.description}).\nGenerated prompts will include domain-specific sections for this type of project.\n`;
-  fs.writeFileSync(path.join(specDir, '_steering.md'), steeringContent, 'utf-8');
-
-  // Write _role.md with template-appropriate role
-  const roleMap: Record<string, string> = {
-    'rest-api':
-      'You are a senior backend engineer specializing in RESTful API design and web services.',
-    'game-feature':
-      'You are a senior game designer and engineer with expertise in player experience and game mechanics.',
-    'ml-experiment':
-      'You are a senior ML engineer specializing in experiment design, model evaluation, and reproducible research.',
-    'cli-tool':
-      'You are a senior developer specializing in command-line tools, developer experience, and Unix philosophy.',
-    'library-sdk':
-      'You are a senior library author specializing in API design, backward compatibility, and developer ergonomics.',
+  const skillFocusMap: Record<string, string[]> = {
+    'rest-api': [
+      'Prefer explicit API contracts, status codes, and error envelopes.',
+      'Model auth, rate limiting, and versioning decisions early.',
+    ],
+    'cli-tool': [
+      'Optimize for predictable command UX, flags, and scriptability.',
+      'Prefer clear stdout/stderr contracts and non-zero exit codes.',
+    ],
+    'library-sdk': [
+      'Design stable public APIs with compatibility and migration paths.',
+      'Document versioning strategy and consumer-facing examples.',
+    ],
   };
-  if (roleMap[templateId]) {
-    fs.writeFileSync(path.join(specDir, '_role.md'), roleMap[templateId], 'utf-8');
-  }
-}
 
+  const focus = skillFocusMap[templateId] ?? [];
+  const focusBlock = focus.length > 0 ? `\n## Skill focus\n\n- ${focus.join('\n- ')}\n` : '';
+
+  // Write _steering.md with domain context and template-specific skills.
+  const steeringContent = `# ${template.name} Spec\n\nThis spec uses the **${template.name}** template (${template.description}).\nGenerated prompts will include domain-specific guidance for this project type.${focusBlock}\nUse this file to add or refine spec-level skills and constraints.\n`;
+  fs.writeFileSync(path.join(specDir, '_steering.md'), steeringContent, 'utf-8');
+}
 export type SpecType = 'feature' | 'bugfix';
 export type GenerationMode = 'requirements-first' | 'design-first' | 'bugfix';
 

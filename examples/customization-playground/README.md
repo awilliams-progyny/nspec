@@ -1,40 +1,36 @@
 # Customization Playground
 
-This folder shows practical nSpec customization depth using copy-ready files.
+This folder is the fastest way to learn nSpec customization through concrete examples.
 
-How to use these examples:
-1. Copy the file(s) you want into your workspace `.specs/` folder.
-2. Regenerate the relevant stage (Requirements, Design, Tasks, Verify).
-3. Iterate on wording until output shape is stable.
+## Start here
 
-## Easy customization (low risk, fast)
+1. Open [Prompt System Guide](../../readMe/PROMPTS.md)
+2. Open [Example Usages](../../readMe/EXAMPLE-USAGES.md)
+3. Copy one example file into your real `.specs/` folder
+4. Regenerate the relevant stage
+5. Evaluate output and iterate
 
-- Requirements format toggle in panel: `Format: GWT` / `Format: EARS`.
-- Workspace steering files in `.specs/steering/*.md`.
-- Per-spec steering in `.specs/<name>/_steering.md`.
+## What this folder contains
 
-Why easy: these adjust guidance without replacing the core generation template.
+- `/.specs/hello-world/`:
+  - a small, practical customization set you can copy directly
+- `/.specs/maximal-markdowns/`:
+  - a “maximum expected markdowns” reference pack
+  - includes workspace-level and spec-level examples
 
-## Medium customization (targeted output shaping)
+## Recommended learning order
 
-- Per-spec role override in `.specs/<name>/_role.md`.
-- Workspace role override in `.specs/_role.md`.
+1. `steering/*.md` (context)
+2. `_steering.md` (spec-local context)
+3. `_prompts/<stage>.md` (full stage control)
+4. `_role.md` (legacy/compatibility only)
 
-Why medium: role changes can significantly alter language and prioritization; verify outputs stay aligned.
+## Usage notes
 
-## Advanced customization (full control)
-
-- Full stage prompt override in `.specs/<name>/_prompts/<stage>.md`.
-- Workspace-wide override in `.specs/_prompts/<stage>.md`.
-
-Why advanced: this bypasses built-in defaults for that stage. Keep prompts explicit and deterministic.
-
-## Hard / code-level customization (not simple file drops)
-
-- Changing panel UX behavior, action wiring, streaming model, or task orchestration.
-- Altering stage pipeline sequencing and command dispatch behavior.
-
-Why hard: requires extension code changes (`src/SpecPanelProvider.ts`, `media/panel.js`, `src/core/prompts.ts`, etc.).
+- Steering skills are usually enough for most teams.
+- `_prompts/<stage>.md` is powerful but higher-maintenance.
+- `_role.md` is optional legacy compatibility when steering is not enough.
+- Use `explain-prompt` and `lint-customization` when behavior is unclear.
 
 ## Included examples in this folder
 

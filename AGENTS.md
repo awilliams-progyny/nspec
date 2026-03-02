@@ -21,7 +21,7 @@ Each spec lives in `.specs/<name>/` as markdown files. This gives you a traceabl
 │   ├── verify.md               # Health score, coverage matrix, gap analysis
 │   ├── _progress.json          # Task completion tracking
 │   ├── _steering.md            # (optional) Domain context for this spec
-│   ├── _role.md                # (optional) Override the AI's role preamble
+│   ├── _role.md                # (optional, legacy) Role fallback (prefer steering skills)
 │   └── _prompts/               # (optional) Full prompt overrides per stage
 │       └── requirements.md, design.md, tasks.md, verify.md
 ├── steering/                   # (optional) Workspace-wide steering files
@@ -30,7 +30,7 @@ Each spec lives in `.specs/<name>/` as markdown files. This gives you a traceabl
 │   ├── structure.md            # Directory structure, module boundaries
 │   └── testing.md              # Test conventions, coverage requirements
 ├── _steering.md                # (optional) Legacy workspace-wide domain context
-├── _role.md                    # (optional) Workspace-wide role override
+├── _role.md                    # (optional, legacy) Workspace role fallback
 └── _prompts/                   # (optional) Workspace-wide prompt overrides
 ```
 
@@ -166,8 +166,10 @@ After running verify, check:
 
 To customize AI behavior for a specific spec:
 
+Use steering files first; reach for `_role.md` only as a legacy fallback.
+
 - **`_steering.md`** — Add domain context (e.g., "This is a healthcare app, all data must be HIPAA compliant")
-- **`_role.md`** — Override the AI's role (e.g., "You are a mobile game designer")
+- **`_role.md`** — Legacy fallback for strict lens control when steering is not enough
 - **`_prompts/<stage>.md`** — Completely replace the system prompt for a stage
 
 Workspace-wide files in `.specs/` apply to all specs. Spec-specific files override workspace-wide.

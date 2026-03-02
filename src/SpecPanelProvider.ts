@@ -94,7 +94,7 @@ export class SpecPanelProvider {
     const models = await this.ai.getAvailableModels();
     if (models.length === 0) {
       vscode.window.showWarningMessage(
-        'nSpec: No AI model found. Add an API key in Settings -> nSpec (Cursor), or sign in to GitHub Copilot (VS Code).'
+        'nSpec: No AI model found. Add an API key in Settings -> nSpec.'
       );
       return;
     }
@@ -1125,12 +1125,16 @@ export class SpecPanelProvider {
           ? ' Available Codex commands: ' +
             startResult.availableCodexCommands.slice(0, 6).join(', ')
           : '';
+      const reason =
+        startResult.failureReason === 'no_codex_commands'
+          ? 'No Codex commands are available in this VS Code session. Install/enable the Codex extension, then reload the window.'
+          : 'Found Codex commands, but nSpec could not start a Codex session automatically. Open Codex once and retry.';
+      const message = reason + availableHint;
       this.postMessage({
         type: 'error',
-        message:
-          'Failed to start Codex session from nSpec. Open Codex and retry Run checked.' +
-          availableHint,
+        message,
       });
+      void this.notifyCodexUnavailable(message);
       return;
     }
 
@@ -1256,20 +1260,53 @@ export class SpecPanelProvider {
     specsFolder: string,
     specName: string,
     allCommands: Set<string>
-  ): Promise<{ started: boolean; commandId: string; availableCodexCommands: string[] }> {
+  ): Promise<{
+    started: boolean;
+    commandId: string;
+    availableCodexCommands: string[];
+    failureReason: 'none' | 'no_codex_commands' | 'invoke_failed';
+  }> {
     const availableCodexCommands = Array.from(allCommands)
       .filter((cmd) => cmd.toLowerCase().startsWith('codex.'))
       .sort();
 
     const candidates = this.getCodexCommandCandidates(allCommands);
+    if (candidates.length === 0) {
+      return {
+        started: false,
+        commandId: 'none',
+        availableCodexCommands,
+        failureReason: 'no_codex_commands',
+      };
+    }
+
     for (const commandId of candidates) {
       const ok = await this.tryStartCodexWithCommand(commandId, prompt, specsFolder, specName);
       if (ok) {
-        return { started: true, commandId, availableCodexCommands };
+        return { started: true, commandId, availableCodexCommands, failureReason: 'none' };
       }
     }
 
-    return { started: false, commandId: 'none', availableCodexCommands };
+    return {
+      started: false,
+      commandId: 'none',
+      availableCodexCommands,
+      failureReason: 'invoke_failed',
+    };
+  }
+
+  private async notifyCodexUnavailable(message: string): Promise<void> {
+    const action = await vscode.window.showErrorMessage(
+      `nSpec: ${message}`,
+      'Open Extensions',
+      'Reload Window'
+    );
+
+    if (action === 'Open Extensions') {
+      await vscode.commands.executeCommand('workbench.view.extensions');
+    } else if (action === 'Reload Window') {
+      await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }
   }
 
   private async handleRunTaskSupervised(taskLabel: string) {

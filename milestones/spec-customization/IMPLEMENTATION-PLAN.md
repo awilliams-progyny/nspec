@@ -5,7 +5,7 @@
 1. Introduce one shared prompt assembly module and route all generation paths through it.
 2. Keep customization semantics fixed and explicit:
 - steering = add/merge context
-- role = replace persona
+- legacy role = fallback lens replacement (prefer steering skills)
 - `_prompts` = full stage replacement
 3. Add `explain-prompt` to show exact sources used for a stage prompt.
 4. Add `lint-customization` to detect complexity regressions and unsafe config.
@@ -159,7 +159,7 @@ Done when:
 - Check: code search shows no independent composition paths in panel/CLI/chat.
 
 2. Mechanism semantics
-- Target: three mechanisms only (steering merge, role replace, prompt full replace).
+- Target: three mechanisms only (steering merge, legacy role replace, prompt full replace).
 - Check: unit tests for each mechanism and precedence order.
 
 3. `_sections` elimination

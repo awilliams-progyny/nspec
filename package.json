@@ -2,7 +2,7 @@
   "name": "nSpec",
   "displayName": "nSpec",
   "description": "Generate and maintain structured specs (Requirements → Design → Tasks → Verify) with AI. Use GitHub Copilot or Cursor, custom prompts, hooks, and verification for spec-driven development.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "awilliams",
   "engines": {
     "vscode": "^1.93.0"
@@ -40,7 +40,7 @@
     "onCommand:nspec.vibeToSpec",
     "onCommand:nspec.scaffoldPrompts",
     "onCommand:nspec.checkTasks",
-    "onChatParticipant:nspec.chat",
+    "onCommand:nspec.validateSetup",
     "onView:nspec.welcomeView"
   ],
   "main": "./out/extension.js",
@@ -74,6 +74,10 @@
       {
         "command": "nspec.checkTasks",
         "title": "nSpec: Check Task Completion"
+      },
+      {
+        "command": "nspec.validateSetup",
+        "title": "nSpec: Validate Setup"
       }
     ],
     "viewsContainers": {
@@ -96,7 +100,7 @@
     "viewsWelcome": [
       {
         "view": "nspec.welcomeView",
-        "contents": "Create and manage structured specs — Requirements → Design → Tasks → Verify.\n[Open nSpec Panel](command:nspec.open)\n[New Spec](command:nspec.newSpec)"
+        "contents": "Create and manage structured specs — Requirements → Design → Tasks → Verify.\n[Open nSpec Panel](command:nspec.open)\n[New Spec](command:nspec.newSpec)\n[Validate Setup](command:nspec.validateSetup)"
       }
     ],
     "menus": {
@@ -127,6 +131,9 @@
         },
         {
           "command": "nspec.checkTasks"
+        },
+        {
+          "command": "nspec.validateSetup"
         }
       ]
     },
@@ -177,33 +184,6 @@
         }
       }
     },
-    "chatParticipants": [
-      {
-        "id": "nspec.chat",
-        "fullName": "nSpec",
-        "name": "nspec",
-        "description": "Generate and manage specs from conversation",
-        "isSticky": false,
-        "commands": [
-          {
-            "name": "spec",
-            "description": "Generate a spec from this conversation"
-          },
-          {
-            "name": "status",
-            "description": "Show spec status"
-          },
-          {
-            "name": "refine",
-            "description": "Refine a spec stage with feedback"
-          },
-          {
-            "name": "context",
-            "description": "Inject a spec as context (spec:name)"
-          }
-        ]
-      }
-    ],
     "keybindings": [
       {
         "command": "nspec.open",
@@ -216,13 +196,16 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package",
+    "package": "npm run compile && vsce package",
     "test": "vitest run",
+    "verify:runtime": "node scripts/verify-extension-runtime.mjs",
     "test:extension": "node test/run-extension-tests.js",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\"",
-    "format:check": "prettier --check \"src/**/*.ts\""
+    "format:check": "prettier --check \"src/**/*.ts\"",
+    "precompile": "npm run clean",
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\""
   },
   "devDependencies": {
     "@types/mocha": "^10.0.0",
@@ -238,8 +221,5 @@
     "prettier": "^3.2.0",
     "typescript": "^5.3.0",
     "vitest": "^4.0.18"
-  },
-  "dependencies": {
-    "toml": "^3.0.0"
   }
 }

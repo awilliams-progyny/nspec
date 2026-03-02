@@ -9,7 +9,7 @@ nSpec prompt assembly is now one path for panel, CLI, and chat generation:
 - Workspace steering (`.specs/steering/*.md`, alphabetical)
 - Optional legacy workspace steering (`.specs/_steering.md`)
 - Optional spec steering (`.specs/<name>/_steering.md`)
-- Role override (`.specs/<name>/_role.md` then `.specs/_role.md`)
+- Optional legacy role override (`.specs/<name>/_role.md` then `.specs/_role.md`)
 4. Resolve requirements format (`override > spec config > workspace config > default`).
 5. Resolve stage prompt source:
 - Spec override `.specs/<name>/_prompts/<stage>.md`
@@ -28,7 +28,7 @@ These are not user markdown files. They are extension behavior you influence ind
 |---|---|---|---|---|
 | `src/core/prompts.ts` built-in templates | Stable defaults | Defines default stage prompt text and output rules | Baseline quality when no `_prompts` overrides exist | Design includes architecture + Mermaid sequence requirement |
 | `src/core/promptAssembly.ts` | Predictable precedence | Applies merge/replace rules and builds source map | Same composition behavior across panel/CLI/chat | `spec _prompts/design.md` always wins over workspace prompt |
-| `src/core/specStore.ts` loaders | File resolution | Loads config, role, steering, prompt override files | Determines what content is available to prompt assembly | Steering files loaded alphabetically from `.specs/steering/` |
+| `src/core/specStore.ts` loaders | File resolution | Loads config, legacy role, steering, prompt override files | Determines what content is available to prompt assembly | Steering files loaded alphabetically from `.specs/steering/` |
 
 ## User Markdown You Can Author
 
@@ -37,8 +37,8 @@ These are not user markdown files. They are extension behavior you influence ind
 | `.specs/steering/*.md` | Shared project constraints | Encode product/tech/test conventions | Added to every stage prompt for every spec | `tech.md` says TypeScript strict + Vitest |
 | `.specs/_steering.md` | One workspace steering file | Add global context in one place | Added after `steering/*.md` for all specs | Security/compliance policy text |
 | `.specs/<name>/_steering.md` | Spec-local context | Add constraints for one spec | Added only for that spec | Payments spec requires idempotency keys |
-| `.specs/_role.md` | Workspace authoring style | Set default AI role/persona | Replaces default role for all specs unless spec role exists | "You are a pragmatic staff engineer" |
-| `.specs/<name>/_role.md` | Spec-specific role | Override role for one spec | Replaces role for that spec only | "You are a security architect" |
+| `.specs/_role.md` | Legacy workspace lens | Optional legacy role fallback | Replaces default role for all specs unless spec role exists | "You are a pragmatic staff engineer" |
+| `.specs/<name>/_role.md` | Legacy spec lens | Optional legacy role fallback for one spec | Replaces role for that spec only | "You are a security architect" |
 | `.specs/_prompts/<stage>.md` | Global stage behavior change | Full custom stage instructions | Replaces built-in stage prompt for all specs | Custom `tasks.md` format policy |
 | `.specs/<name>/_prompts/<stage>.md` | One-spec stage control | Full custom stage instructions for one spec | Replaces built-in stage prompt for one spec+stage | Spec-specific `verify` scoring rules |
 | `.specs/<name>/requirements.md` etc. | Output editing | Directly edit generated content | Changes current stage document; downstream regen uses this content | Manual clarification in requirements |
@@ -48,11 +48,12 @@ These are not user markdown files. They are extension behavior you influence ind
 Improve all generated outputs with project context:
 - Edit `.specs/steering/product.md` and `.specs/steering/tech.md`
 
-Change writing posture globally:
-- Edit `.specs/_role.md`
+Add global skills instructions:
+- Edit `.specs/steering/*.md` or `.specs/_steering.md`
 
 Change only one spec's behavior:
-- Edit `.specs/<name>/_steering.md` and/or `.specs/<name>/_role.md`
+- Edit `.specs/<name>/_steering.md`
+- use `.specs/<name>/_role.md` only for legacy compatibility
 
 Completely redefine one stage output format:
 - Edit `.specs/<name>/_prompts/<stage>.md`

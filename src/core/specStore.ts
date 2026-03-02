@@ -715,7 +715,9 @@ function stableId(label: string, line: number): string {
   return `${label.slice(0, 32).replace(/\s+/g, '_').toLowerCase()}_${line}`;
 }
 
-function normalizeTaskSelectionState(value: TaskSelectionState | boolean | undefined): TaskSelectionState {
+function normalizeTaskSelectionState(
+  value: TaskSelectionState | boolean | undefined
+): TaskSelectionState {
   if (value === 'done' || value === 'checked' || value === 'empty') return value;
   return value ? 'done' : 'empty';
 }

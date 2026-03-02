@@ -65,16 +65,54 @@ export type ToExtensionMessage =
   | { command: 'importFromFile' }
   | { command: 'setRequirementsFormat'; format: 'given-when-then' | 'ears' }
   | { command: 'cancelTaskRun' }
-  | { command: 'startClarification'; specName: string; description: string; specType: string; template: string }
-  | { command: 'submitClarification'; specName: string; description: string; specType: string; qaTranscript: string; template: string };
+  | {
+      command: 'startClarification';
+      specName: string;
+      description: string;
+      specType: string;
+      template: string;
+    }
+  | {
+      command: 'submitClarification';
+      specName: string;
+      description: string;
+      specType: string;
+      qaTranscript: string;
+      template: string;
+    };
 
 // ── Extension → Webview ────────────────────────────────────────────────────────
 
 export type FromExtensionMessage =
-  | { type: 'init'; specs: SpecSummary[]; models: AvailableModel[]; selectedModelId: string | null; activeSpec: string | null; activeStage: Stage; contents: Partial<Record<Stage, string>>; requirementsFormat?: string }
+  | {
+      type: 'init';
+      specs: SpecSummary[];
+      models: AvailableModel[];
+      selectedModelId: string | null;
+      activeSpec: string | null;
+      activeStage: Stage;
+      contents: Partial<Record<Stage, string>>;
+      requirementsFormat?: string;
+    }
   | { type: 'triggerNewSpec' }
-  | { type: 'specCreated'; specName: string; displayName: string; stage: Stage; progress: TaskProgress | null; hasCustomPrompts: boolean; vibeSource?: boolean }
-  | { type: 'specOpened'; specName: string; activeStage: Stage; contents: Partial<Record<Stage, string>>; progress: TaskProgress | null; hasCustomPrompts: boolean; requirementsFormat?: string }
+  | {
+      type: 'specCreated';
+      specName: string;
+      displayName: string;
+      stage: Stage;
+      progress: TaskProgress | null;
+      hasCustomPrompts: boolean;
+      vibeSource?: boolean;
+    }
+  | {
+      type: 'specOpened';
+      specName: string;
+      activeStage: Stage;
+      contents: Partial<Record<Stage, string>>;
+      progress: TaskProgress | null;
+      hasCustomPrompts: boolean;
+      requirementsFormat?: string;
+    }
   | { type: 'specDeleted'; specName: string }
   | { type: 'specRenamed'; oldName: string; newName: string }
   | { type: 'streamStart'; stage: Stage; isRefine?: boolean }
@@ -89,8 +127,19 @@ export type FromExtensionMessage =
   | { type: 'supervisedRunStart' }
   | { type: 'supervisedRunComplete' }
   | { type: 'taskAutoCompleted'; taskLabel: string }
-  | { type: 'taskCheckResult'; taskLabel: string; status: TaskCheckStatus; evidence: string[]; score: number }
-  | { type: 'checkAllResults'; results: TaskCheckEntry[]; completedCount: number; totalCount: number }
+  | {
+      type: 'taskCheckResult';
+      taskLabel: string;
+      status: TaskCheckStatus;
+      evidence: string[];
+      score: number;
+    }
+  | {
+      type: 'checkAllResults';
+      results: TaskCheckEntry[];
+      completedCount: number;
+      totalCount: number;
+    }
   | { type: 'modelsLoaded'; models: AvailableModel[]; selectedModelId: string | null }
   | { type: 'modelChanged'; modelName: string; modelId: string }
   | { type: 'requirementsFormatChanged'; format: string }

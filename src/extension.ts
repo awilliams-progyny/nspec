@@ -154,7 +154,9 @@ async function validateSetup() {
   report.push(`Workspace folders: ${workspaceCount > 0 ? workspaceCount : 'none'}`);
   report.push(`Specs folder: ${specsRoot ?? '(no workspace open)'}`);
   report.push(`API key configured: ${apiKey ? 'yes' : 'no'}`);
-  report.push(`nSpec commands registered: ${expectedNspecCommands.length - missingNspecCommands.length}/${expectedNspecCommands.length}`);
+  report.push(
+    `nSpec commands registered: ${expectedNspecCommands.length - missingNspecCommands.length}/${expectedNspecCommands.length}`
+  );
   report.push(`Codex commands detected: ${codexCommands.length}`);
   if (codexCommands.length > 0) {
     report.push('Codex command sample: ' + codexCommands.slice(0, 8).join(', '));

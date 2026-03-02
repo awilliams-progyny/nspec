@@ -49,7 +49,11 @@ function makeVscodeLMModel(id = 'copilot-gpt-4') {
     vendor: 'GitHub',
     family: 'gpt-4',
     name: 'GPT-4 (Copilot)',
-    sendRequest: vi.fn().mockResolvedValue({ text: (async function* () { yield 'hello'; })() }),
+    sendRequest: vi.fn().mockResolvedValue({
+      text: (async function* () {
+        yield 'hello';
+      })(),
+    }),
   };
 }
 
@@ -299,7 +303,8 @@ describe('LMClient.streamCompletion provider routing', () => {
             read: async () => {
               if (done) return { done: true, value: undefined };
               done = true;
-              const text = 'event: content_block_delta\ndata: {"delta":{"type":"text_delta","text":"hi"}}\n\nevent: message_stop\ndata: {}\n\n';
+              const text =
+                'event: content_block_delta\ndata: {"delta":{"type":"text_delta","text":"hi"}}\n\nevent: message_stop\ndata: {}\n\n';
               return { done: false, value: new TextEncoder().encode(text) };
             },
           };

@@ -311,12 +311,7 @@ export class SpecPanelProvider {
           break;
 
         case 'createSpec':
-          await this.handleCreateSpec(
-            msg.specName,
-            msg.prompt,
-            msg.specType,
-            msg.template
-          );
+          await this.handleCreateSpec(msg.specName, msg.prompt, msg.specType, msg.template);
           break;
 
         case 'openSpec':
@@ -1049,7 +1044,10 @@ export class SpecPanelProvider {
             this.lastWriteTs = Date.now();
             specManager.writeStage(this.state.activeSpec, stage, accumulated);
             if (stage === 'tasks') {
-              const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, accumulated);
+              const progress = specManager.syncProgressFromMarkdown(
+                this.state.activeSpec,
+                accumulated
+              );
               this.postMessage({ type: 'progressUpdated', progress });
             }
           }
@@ -1159,10 +1157,7 @@ export class SpecPanelProvider {
     return compact.slice(0, maxChars) + '\n\n[...truncated by nSpec for prompt size]';
   }
 
-  private buildRunCheckedPrompt(
-    specPath: string,
-    selectedTasks: Array<{ label: string }>
-  ): string {
+  private buildRunCheckedPrompt(specPath: string, selectedTasks: Array<{ label: string }>): string {
     const req = this.trimForPrompt(this.state.contents.requirements || '', 6000);
     const des = this.trimForPrompt(this.state.contents.design || '', 6000);
     const tasks = this.trimForPrompt(this.state.contents.tasks || '', 8000);
@@ -1551,7 +1546,6 @@ export class SpecPanelProvider {
       template
     );
   }
-
 }
 
 function getNonce(): string {

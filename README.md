@@ -136,7 +136,7 @@ Use the `@nspec` chat participant in VS Code chat with Codex:
 | `@nspec /refine <name> <stage>` | Refine a spec stage |
 | `@nspec /context <name>` | Inject a spec's full content as chat context |
 
-Requires `nspec.apiKey` set to your OpenAI key. When a Rovo MCP connection is configured (`nspec.rovoMcpConfigPath`), Codex can pull live Jira issues, Confluence pages, and agent context directly into spec generation.
+Requires `nspec.apiKey` set to your OpenAI key.
 
 **Cross-referencing a spec in chat:**  
 Type `spec:<name>` or `#spec:<name>` anywhere in a Codex chat message to inject the spec's requirements, design, and tasks as context:
@@ -159,10 +159,6 @@ All settings are under **Settings → nSpec** (search `nspec` in the VS Code set
 | `nspec.apiModel` | `gpt-4o` | Model name. Examples: `gpt-4o`, `llama3`. |
 | `nspec.preferredModelId` | — | VS Code model ID. Set via **nSpec: Select AI Model** command. |
 | `nspec.allowedCommands` | `["npm install","npm run","npx"]` | Command prefixes auto-approved during supervised task execution. All others require manual approval. |
-| `nspec.jiraBaseUrl` | — | Deprecated fallback. Jira import now expects credentials/base URL from Rovo MCP config. |
-| `nspec.jiraEmail` | — | Deprecated fallback. Jira import now expects credentials/base URL from Rovo MCP config. |
-| `nspec.jiraApiToken` | — | Deprecated fallback. Jira import now expects credentials/base URL from Rovo MCP config. |
-| `nspec.rovoMcpConfigPath` | — | Path to `config.toml` for Rovo MCP. Required for Jira import in New Spec. Relative to workspace root. Leave empty to use `.cursor/mcp.json`. |
 
 ---
 
@@ -197,7 +193,6 @@ Override AI behaviour at any granularity without touching source code.
 | `.specs/_prompts/<stage>.md` | All specs | Replace the system prompt for a stage workspace-wide |
 | `.specs/<name>/_steering.md` | One spec | Domain context for a specific spec |
 | `.specs/<name>/_prompts/<stage>.md` | One spec | Replace the system prompt for one stage |
-| `.specs/<name>/_sections/<stage>.md` | One spec | Append extra output sections |
 | `.specs/<name>/_role.md` | One spec | Change the AI persona |
 
 Run **nSpec: Setup Steering Files** to auto-generate `product.md`, `tech.md`, and `structure.md` from your workspace.

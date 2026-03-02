@@ -11,38 +11,62 @@ let hooksOutputChannel: vscode.OutputChannel | undefined;
 export function activate(context: vscode.ExtensionContext) {
   provider = new SpecPanelProvider(context);
 
+  const runCommand = async (label: string, fn: () => void | Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage('nSpec: ' + label + ' failed - ' + message);
+      console.error('[nSpec] Command failed:', label, err);
+    }
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand('nspec.open', () => {
-      provider!.show();
+      void runCommand('Open panel', async () => {
+        provider!.show();
+      });
     }),
 
     vscode.commands.registerCommand('nspec.newSpec', () => {
-      provider!.show();
-      provider!.triggerNewSpec();
+      void runCommand('New spec', async () => {
+        provider!.show();
+        provider!.triggerNewSpec();
+      });
     }),
 
-    vscode.commands.registerCommand('nspec.pickModel', async () => {
-      provider!.show();
-      await provider!.pickModel();
+    vscode.commands.registerCommand('nspec.pickModel', () => {
+      void runCommand('Select model', async () => {
+        provider!.show();
+        await provider!.pickModel();
+      });
     }),
 
     vscode.commands.registerCommand('nspec.setupSteering', () => {
-      provider!.setupSteering();
+      void runCommand('Setup steering', async () => {
+        provider!.setupSteering();
+      });
     }),
 
-    vscode.commands.registerCommand('nspec.vibeToSpec', async () => {
-      provider!.show();
-      await provider!.vibeToSpec();
+    vscode.commands.registerCommand('nspec.vibeToSpec', () => {
+      void runCommand('Generate spec from conversation', async () => {
+        provider!.show();
+        await provider!.vibeToSpec();
+      });
     }),
 
     vscode.commands.registerCommand('nspec.scaffoldPrompts', () => {
-      provider!.show();
-      provider!.scaffoldPromptsCommand();
+      void runCommand('Scaffold prompts', async () => {
+        provider!.show();
+        provider!.scaffoldPromptsCommand();
+      });
     }),
 
     vscode.commands.registerCommand('nspec.checkTasks', () => {
-      provider!.show();
-      provider!.checkTasksCommand();
+      void runCommand('Check tasks', async () => {
+        provider!.show();
+        provider!.checkTasksCommand();
+      });
     })
   );
 

@@ -1,2 +1,0 @@
-Critical Gaps
-Residual Risk

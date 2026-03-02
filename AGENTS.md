@@ -22,9 +22,7 @@ Each spec lives in `.specs/<name>/` as markdown files. This gives you a traceabl
 │   ├── _progress.json          # Task completion tracking
 │   ├── _steering.md            # (optional) Domain context for this spec
 │   ├── _role.md                # (optional) Override the AI's role preamble
-│   ├── _prompts/               # (optional) Full prompt overrides per stage
-│   │   └── requirements.md, design.md, tasks.md, verify.md
-│   └── _sections/              # (optional) Extra output sections per stage
+│   └── _prompts/               # (optional) Full prompt overrides per stage
 │       └── requirements.md, design.md, tasks.md, verify.md
 ├── steering/                   # (optional) Workspace-wide steering files
 │   ├── product.md              # Product vision, target users
@@ -101,6 +99,18 @@ nspec import <name> <stage> <file> --transform  # AI-convert to spec format firs
 nspec setup-agents     # Writes this AGENTS.md file
 ```
 
+### Explain prompt sources
+```bash
+nspec explain-prompt <name> <stage>
+# Shows base template, role/steering/prompt sources, and precedence used
+```
+
+### Lint customization
+```bash
+nspec lint-customization [name]
+# Warns about risky overrides and errors on removed _sections usage
+```
+
 ### Set up steering files
 ```bash
 nspec setup-steering   # Generates steering files from workspace (product.md, tech.md, structure.md)
@@ -159,7 +169,6 @@ To customize AI behavior for a specific spec:
 - **`_steering.md`** — Add domain context (e.g., "This is a healthcare app, all data must be HIPAA compliant")
 - **`_role.md`** — Override the AI's role (e.g., "You are a mobile game designer")
 - **`_prompts/<stage>.md`** — Completely replace the system prompt for a stage
-- **`_sections/<stage>.md`** — Add extra output sections (one per line)
 
 Workspace-wide files in `.specs/` apply to all specs. Spec-specific files override workspace-wide.
 

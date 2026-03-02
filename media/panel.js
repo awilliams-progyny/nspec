@@ -974,8 +974,6 @@ function closeNewModal() {
   if (nameEl) nameEl.value = '';
   const promptEl = document.getElementById('new-spec-prompt');
   if (promptEl) promptEl.value = '';
-  const jiraEl = document.getElementById('new-spec-jira');
-  if (jiraEl && 'value' in jiraEl) jiraEl.value = '';
   const tmplEl = document.getElementById('new-spec-template');
   if (tmplEl) tmplEl.value = '';
   const featRadio = document.querySelector('input[name="spec-type"][value="feature"]');
@@ -991,26 +989,22 @@ function updateStep1ForType() {
   const label   = document.getElementById('prompt-label');
   const area    = document.getElementById('new-spec-prompt');
   const nextBtn = document.getElementById('btn-wiz-next-1');
-  const jiraField = document.getElementById('jira-field');
   const tmplField = document.getElementById('template-field');
 
   if (specType === 'bugfix') {
     if (label)   label.textContent = 'Bug report';
     if (area)    area.placeholder = 'Describe the bug: symptoms, reproduction steps, expected vs actual behavior…';
     if (nextBtn) nextBtn.textContent = 'Analyze Root Cause →';
-    if (jiraField) jiraField.style.display = 'none';
     if (tmplField) tmplField.style.display = 'none';
   } else if (specType === 'design-first') {
     if (label)   label.textContent = 'Design description';
     if (area)    area.placeholder = 'Describe the technical design, architecture, or approach…';
     if (nextBtn) nextBtn.textContent = 'Generate Design →';
-    if (jiraField) jiraField.style.display = 'block';
     if (tmplField) tmplField.style.display = 'block';
   } else {
     if (label)   label.textContent = 'Description';
     if (area)    area.placeholder = 'Describe the feature, its purpose, key behaviors, and any constraints…';
     if (nextBtn) nextBtn.textContent = 'Generate →';
-    if (jiraField) jiraField.style.display = 'block';
     if (tmplField) tmplField.style.display = 'block';
   }
 }
@@ -1021,20 +1015,9 @@ function getWizardFormData() {
     specType:    getSelectedSpecType(),
     template:    document.getElementById('new-spec-template')?.value       || '',
     description: document.getElementById('new-spec-prompt')?.value?.trim() || '',
-    jiraUrl:     document.getElementById('new-spec-jira')?.value?.trim()   || '',
   };
 }
 
-// Jira URL → auto-infer Feature type
-document.getElementById('new-spec-jira')?.addEventListener('input', (e) => {
-  const val = e.target?.value?.trim() || '';
-  const looksLikeJiraRef =
-    (val && val.includes('atlassian.net')) || /^[A-Z][A-Z0-9]+-\d+$/i.test(val);
-  if (looksLikeJiraRef) {
-    const radio = document.querySelector('input[name="spec-type"][value="feature"]');
-    if (radio && !radio.checked) { radio.checked = true; updateStep1ForType(); }
-  }
-});
 
 // Spec type change
 document.querySelectorAll('input[name="spec-type"]').forEach(r => {
@@ -1045,9 +1028,9 @@ document.querySelectorAll('input[name="spec-type"]').forEach(r => {
 document.getElementById('btn-wiz-next-1')?.addEventListener('click', () => {
   const d = getWizardFormData();
   if (!d.specName) { document.getElementById('new-spec-name')?.focus(); showToast('Please enter a spec name.'); return; }
-  if (!d.description && !d.jiraUrl) { document.getElementById('new-spec-prompt')?.focus(); showToast('Enter a description or Jira URL.'); return; }
+  if (!d.description) { document.getElementById('new-spec-prompt')?.focus(); showToast('Enter a description.'); return; }
   closeNewModal();
-  vscode.postMessage({ command: 'createSpec', specName: d.specName, prompt: d.description, specType: d.specType, template: d.template, jiraUrl: d.jiraUrl || undefined });
+  vscode.postMessage({ command: 'createSpec', specName: d.specName, prompt: d.description, specType: d.specType, template: d.template });
 });
 
 document.getElementById('btn-new-cancel')?.addEventListener('click', closeNewModal);

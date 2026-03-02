@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as store from './core/specStore';
+import { assembleSystemPrompt as assembleCoreSystemPrompt } from './core/promptAssembly';
 import { getSpecsRoot, getWorkspaceRoot } from './workspace';
 
 // Re-export types from core so existing consumers don't break.
@@ -39,6 +40,34 @@ function requireSpecsRoot(): string {
 
 // ── OpenSpec prompt loading (delegates to core with vscode-resolved roots) ───
 
+export interface AssembleSystemPromptOptions {
+  title?: string;
+  requirementsFormatOverride?: store.RequirementsFormat;
+  lightDesignOverride?: boolean;
+}
+
+export function assembleSystemPrompt(
+  specName: string,
+  stage: store.Stage,
+  options: AssembleSystemPromptOptions = {}
+): ReturnType<typeof assembleCoreSystemPrompt> | null {
+  const root = getSpecsRoot();
+  if (!root) return null;
+
+  const wsRoot = getWorkspaceRoot();
+  const wsSpecsRoot = wsRoot ? path.join(wsRoot, '.specs') : undefined;
+
+  return assembleCoreSystemPrompt({
+    specsRoot: root,
+    fallbackSpecsRoot: wsSpecsRoot && wsSpecsRoot !== root ? wsSpecsRoot : undefined,
+    specName,
+    stage,
+    title: options.title,
+    requirementsFormatOverride: options.requirementsFormatOverride,
+    lightDesignOverride: options.lightDesignOverride,
+  });
+}
+
 export function loadCustomPrompt(specName: string, stage: store.Stage): string | null {
   const root = getSpecsRoot();
   if (!root) return null;
@@ -63,12 +92,6 @@ export function loadRole(specName: string): string | null {
   const root = getSpecsRoot();
   if (!root) return null;
   return store.loadRole(root, specName);
-}
-
-export function loadExtraSections(specName: string, stage: store.Stage): string[] {
-  const root = getSpecsRoot();
-  if (!root) return [];
-  return store.loadExtraSections(root, specName, stage);
 }
 
 export function hasCustomPrompts(specName: string): boolean {

@@ -1,128 +1,84 @@
-# nSpec Taxonomy: How Customization Actually Works
+# nSpec Taxonomy: Customization Without Hidden Complexity
 
 ## Flow Summary
 
-nSpec generation uses this runtime flow:
-1. Start from built-in stage templates (Requirements/Design/Tasks/Verify behavior in code).
-2. Load JSON controls: workspace `.specs/config.json` and spec `.specs/<name>/spec.config.json` (for settings like `requirementsFormat`, mode, template metadata).
-3. Build context layers by merging steering (`.specs/steering/*.md`, optional `_steering.md`) and role (`_role.md`).
-4. Apply customization controls for the requested stage:
-   - `_prompts/<stage>.md` = full prompt replacement
-   - `_sections/<stage>.md` = additive section requests
-5. Generate/update stage outputs (`requirements.md` → `design.md` → `tasks.md` → `verify.md`, or bugfix stage equivalents).
-6. Feed downstream stages from upstream outputs (for example, `requirements.md` drives `design.md`, then `tasks.md`).
-7. Persist runtime state (`_progress.json`, config updates) so task selection/completion and spec settings survive regeneration.
+nSpec prompt assembly is now one path for panel, CLI, and chat generation:
+1. Resolve the spec path (`.specs/<name>/`) and stage (`requirements|design|tasks|verify`).
+2. Read config values from `.specs/config.json` and `.specs/<name>/spec.config.json`.
+3. Build context layers:
+- Workspace steering (`.specs/steering/*.md`, alphabetical)
+- Optional legacy workspace steering (`.specs/_steering.md`)
+- Optional spec steering (`.specs/<name>/_steering.md`)
+- Role override (`.specs/<name>/_role.md` then `.specs/_role.md`)
+4. Resolve requirements format (`override > spec config > workspace config > default`).
+5. Resolve stage prompt source:
+- Spec override `.specs/<name>/_prompts/<stage>.md`
+- Else workspace override `.specs/_prompts/<stage>.md`
+- Else built-in template from `src/core/prompts.ts`
+6. Generate stage output markdown (`requirements.md`, `design.md`, `tasks.md`, `verify.md`).
+7. Persist runtime state (`_progress.json`, updated `spec.config.json` when needed).
 
-In practice:
-- Edit output docs when you want to change *this spec’s current content*.
-- Edit customization markdown when you want to change *how generation behaves*.
+This is implemented by `src/core/promptAssembly.ts` and consumed by panel + CLI + chat.
 
----
+## System/Extension Controls (Code-Owned)
 
-## Important Clarification
+These are not user markdown files. They are extension behavior you influence indirectly.
 
-There are **no hard-locked markdown files** inside `.specs/`.
-- Stage markdown files are editable.
-- Customization markdown files are editable.
-
-What is not directly editable as markdown is the **built-in system behavior** in code (default prompt templates, precedence logic, merge logic).
-
----
-
-## A) System/Extension-Owned Markdown Behavior (Not User-Defined by Default)
-
-These are the markdown behaviors nSpec provides out of the box. You can influence them, but the base contract comes from extension code.
-
-| System Behavior | Best For | Responsibility | Effect on Output | Example |
+| System Control | Best For | Responsibility | Effect | Example |
 |---|---|---|---|---|
-| Built-in Requirements template | Consistent requirement quality by default | Defines default structure and rules for requirements generation | Produces FR-style requirements with acceptance criteria unless overridden | Generated `requirements.md` includes structured functional + non-functional sections |
-| Built-in Design template | Baseline architecture/design completeness | Defines required design sections and flow expectations | Produces architecture-focused `design.md` from requirements | Generated design includes architecture/components/data/flow guidance |
-| Built-in Tasks template | Executable implementation planning | Defines checkbox task format and traceability expectations | Produces phase-based `tasks.md` with requirement mappings | Task line format with effort and `_Requirements: FR-*` mapping |
-| Built-in Verify template | Quality and drift detection | Defines verification rubric and coverage checks | Produces `verify.md` highlighting gaps and readiness | Verify output flags uncovered/weakly covered requirement areas |
-| Pipeline stage chaining | End-to-end spec lifecycle | Uses previous stage outputs as next stage inputs | Keeps Requirements→Design→Tasks→Verify coherent | Updating requirements and regenerating design/tasks changes downstream artifacts |
+| `src/core/prompts.ts` built-in templates | Stable defaults | Defines default stage prompt text and output rules | Baseline quality when no `_prompts` overrides exist | Design includes architecture + Mermaid sequence requirement |
+| `src/core/promptAssembly.ts` | Predictable precedence | Applies merge/replace rules and builds source map | Same composition behavior across panel/CLI/chat | `spec _prompts/design.md` always wins over workspace prompt |
+| `src/core/specStore.ts` loaders | File resolution | Loads config, role, steering, prompt override files | Determines what content is available to prompt assembly | Steering files loaded alphabetically from `.specs/steering/` |
 
-Notes:
-- This section is about **default system behavior**, not files you author.
-- The source for these defaults is code (`src/core/prompts.ts`, loaders in `src/core/specStore.ts`).
+## User Markdown You Can Author
 
----
-
-## B) User-Creatable Markdown (Customization Controls)
-
-These are the markdown files you create when you want a specific effect.
-
-| Markdown You Create | Best For | Responsibility | Effect on Generation | Example |
+| Markdown File | Best For | Responsibility | Effect on Generation | Example |
 |---|---|---|---|---|
-| `.specs/steering/*.md` | Persistent project context | Provide stable product/tech/testing constraints | Adds context to all stage prompts | `tech.md`: "Use Vitest, TypeScript strict mode, no `any`" |
-| `.specs/_steering.md` | Single consolidated steering file | Add workspace-level context in one place | Adds to steering context chain | "All external APIs require retry + timeout policy" |
-| `.specs/<name>/_steering.md` | Spec-specific context | Add constraints for one spec | Adds context only for that spec | "For this payments spec, enforce idempotency" |
-| `.specs/_role.md` | Default writing posture | Set workspace role/persona | Replaces default role when no spec role exists | "You are a pragmatic staff engineer focused on maintainability" |
-| `.specs/<name>/_role.md` | One-spec role specialization | Set role for one spec | Replaces role for that spec | "You are a security architect for auth boundaries" |
-| `.specs/_prompts/<stage>.md` | Global behavior change for a stage | Fully define stage instructions | **Full replace** of built-in prompt for that stage | Custom `tasks.md` prompt forcing strict dependency ordering |
-| `.specs/<name>/_prompts/<stage>.md` | One-spec stage behavior change | Fully define stage instructions for one spec | **Full replace** for that spec+stage | One spec requires custom `verify` scoring rubric |
-| `.specs/<name>/_sections/<stage>.md` | Lightweight structure tweaks | Request extra section headings | **Additive** section extension, not full behavior replacement | Requirements adds `## Requirement Gaps` and `## Open Questions` |
+| `.specs/steering/*.md` | Shared project constraints | Encode product/tech/test conventions | Added to every stage prompt for every spec | `tech.md` says TypeScript strict + Vitest |
+| `.specs/_steering.md` | One workspace steering file | Add global context in one place | Added after `steering/*.md` for all specs | Security/compliance policy text |
+| `.specs/<name>/_steering.md` | Spec-local context | Add constraints for one spec | Added only for that spec | Payments spec requires idempotency keys |
+| `.specs/_role.md` | Workspace authoring style | Set default AI role/persona | Replaces default role for all specs unless spec role exists | "You are a pragmatic staff engineer" |
+| `.specs/<name>/_role.md` | Spec-specific role | Override role for one spec | Replaces role for that spec only | "You are a security architect" |
+| `.specs/_prompts/<stage>.md` | Global stage behavior change | Full custom stage instructions | Replaces built-in stage prompt for all specs | Custom `tasks.md` format policy |
+| `.specs/<name>/_prompts/<stage>.md` | One-spec stage control | Full custom stage instructions for one spec | Replaces built-in stage prompt for one spec+stage | Spec-specific `verify` scoring rules |
+| `.specs/<name>/requirements.md` etc. | Output editing | Directly edit generated content | Changes current stage document; downstream regen uses this content | Manual clarification in requirements |
 
----
+## Quick Mapping: Desired Effect -> What To Edit
 
-## Customization Mechanisms (Fast Rules)
-
-- **Add/Merge context**: steering files (`steering/*.md`, `_steering.md`)
-- **Replace persona**: `_role.md`
-- **Replace generation logic**: `_prompts/<stage>.md`
-- **Append structure only**: `_sections/<stage>.md`
-
-Use `_sections` first when possible. Use `_prompts` only when you intentionally want full control.
-
----
-
-## Quick Recipes (Desired Effect → What To Edit)
-
-I want better domain grounding everywhere:
+Improve all generated outputs with project context:
 - Edit `.specs/steering/product.md` and `.specs/steering/tech.md`
 
-I want one extra quality section in requirements without rewriting prompt logic:
-- Edit `.specs/<name>/_sections/requirements.md`
-- Add lines like:
-  - `Requirement Gaps`
-  - `Open Questions`
+Change writing posture globally:
+- Edit `.specs/_role.md`
 
-I want tasks generation to follow a strict custom format everywhere:
-- Edit `.specs/_prompts/tasks.md` (full replacement)
+Change only one spec's behavior:
+- Edit `.specs/<name>/_steering.md` and/or `.specs/<name>/_role.md`
 
-I want one spec to behave differently from all others:
-- Edit `.specs/<name>/_prompts/<stage>.md` (full replacement for that scope)
+Completely redefine one stage output format:
+- Edit `.specs/<name>/_prompts/<stage>.md`
 
-I want EARS instead of Given/When/Then by default:
-- `nspec config set requirements-format ears`
-- This writes `.specs/config.json` (JSON control file, not markdown)
+Switch requirements format default:
+- Run `nspec config set requirements-format ears`
+- This updates `.specs/config.json`
 
----
+## Non-Markdown Config (Still Important)
 
-## Non-Markdown But Important Controls
+| File | Best For | Responsibility | Example |
+|---|---|---|---|
+| `.specs/config.json` | Workspace defaults | Stores workspace-level settings | `{ "requirementsFormat": "ears" }` |
+| `.specs/<name>/spec.config.json` | Per-spec settings | Stores mode/type/template and per-spec overrides | `{ "generationMode": "design-first", "requirementsFormat": "given-when-then" }` |
 
-` .specs/config.json `
-- Best for: workspace defaults
-- Responsibility: stores config like `requirementsFormat`
-- Effect: changes default requirements format resolution
-- Example:
-```json
-{ "requirementsFormat": "ears" }
-```
+## Debug and Safety Commands
 
-` .specs/<name>/spec.config.json `
-- Best for: per-spec behavior
-- Responsibility: stores mode/type/template and per-spec overrides
-- Effect: spec-local settings win over workspace defaults for that spec
-- Example:
-```json
-{ "generationMode": "requirements-first", "requirementsFormat": "given-when-then", "version": "2.1" }
-```
+- `nspec explain-prompt <name> <stage>`
+Purpose: show exactly which files and precedence rules formed the final system prompt.
 
----
+- `nspec lint-customization [name]`
+Purpose: catch risky customization patterns (oversized steering, conflicting requirements format, full prompt override warnings, removed `_sections` usage).
 
 ## Source of Truth
 
-- Prompt defaults and branching: `src/core/prompts.ts`
-- Loader/precedence for steering, role, prompts, sections: `src/core/specStore.ts`
-- CLI config + requirementsFormat resolution: `bin/nspec.mjs`
-- Panel requirements-format behavior: `src/SpecPanelProvider.ts`
+- Prompt defaults: `src/core/prompts.ts`
+- Prompt assembly and precedence: `src/core/promptAssembly.ts`
+- File loaders/storage: `src/core/specStore.ts`
+- CLI command surface: `bin/nspec.mjs`

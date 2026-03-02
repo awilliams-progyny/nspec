@@ -170,26 +170,6 @@
           ],
           "description": "Shell command prefixes that are auto-approved during supervised task execution. Other commands require manual approval."
         },
-        "nspec.jiraBaseUrl": {
-          "type": "string",
-          "default": "",
-          "description": "Deprecated fallback. Jira import now expects Rovo MCP config for credentials and base URL."
-        },
-        "nspec.jiraEmail": {
-          "type": "string",
-          "default": "",
-          "description": "Deprecated fallback. Jira import now expects Rovo MCP config for credentials and base URL."
-        },
-        "nspec.jiraApiToken": {
-          "type": "string",
-          "default": "",
-          "description": "Deprecated fallback. Jira import now expects Rovo MCP config for credentials and base URL."
-        },
-        "nspec.rovoMcpConfigPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to config.toml (or similar) that defines Rovo MCP. Required for Jira import in New Spec. Relative paths are resolved from workspace root. Leave empty to use .cursor/mcp.json instead."
-        },
         "nspec.showExamplesPrompt": {
           "type": "boolean",
           "default": true,

@@ -8,13 +8,12 @@ Purpose:
 How to use:
 1. Choose only the files needed for your use case.
 2. Copy from this pack into real nSpec paths.
-3. Prefer additive controls first (`steering`, `_sections`) before full replacements (`_prompts`).
+3. Prefer steering and role first; use `_prompts` only when you need full stage replacement.
 
 Semantics:
 - `steering/*.md`, `_steering.md` => add/merge context.
 - `_role.md` => replace role/persona preamble.
 - `_prompts/<stage>.md` => full replacement of a stage system prompt.
-- `_sections/<stage>.md` => append section requests.
 - stage docs (`requirements.md`, `design.md`, `tasks.md`, `verify.md`) => generated/output content you can edit.
 
 Copy targets:
@@ -27,3 +26,4 @@ Copy targets:
 Notes:
 - This folder is intentionally not an active spec.
 - Non-markdown controls (for example `spec.config.json`) are not included in this pack.
+- `_sections` is intentionally excluded; it is no longer supported.

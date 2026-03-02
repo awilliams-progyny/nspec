@@ -1,2 +1,0 @@
-Sequence Diagram
-Failure Modes

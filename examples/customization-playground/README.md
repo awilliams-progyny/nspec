@@ -17,10 +17,10 @@ Why easy: these adjust guidance without replacing the core generation template.
 
 ## Medium customization (targeted output shaping)
 
-- Per-spec extra sections in `.specs/<name>/_sections/<stage>.md`.
 - Per-spec role override in `.specs/<name>/_role.md`.
+- Workspace role override in `.specs/_role.md`.
 
-Why medium: these can significantly change structure/voice and require testing across stages.
+Why medium: role changes can significantly alter language and prioritization; verify outputs stay aligned.
 
 ## Advanced customization (full control)
 
@@ -41,5 +41,4 @@ Why hard: requires extension code changes (`src/SpecPanelProvider.ts`, `media/pa
 - Workspace steering: `.specs/steering/product.md`
 - Per-spec steering: `.specs/hello-world/_steering.md`
 - Per-spec role: `.specs/hello-world/_role.md`
-- Per-spec extra sections: `.specs/hello-world/_sections/tasks.md`
 - Per-spec full prompt override: `.specs/hello-world/_prompts/design.md`

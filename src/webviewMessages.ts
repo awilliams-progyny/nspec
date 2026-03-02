@@ -35,7 +35,7 @@ export interface TaskCheckEntry {
 
 export type ToExtensionMessage =
   | { command: 'ready' }
-  | { command: 'createSpec'; specName: string; prompt: string; specType: string; template: string; jiraUrl?: string }
+  | { command: 'createSpec'; specName: string; prompt: string; specType: string; template: string }
   | { command: 'openSpec'; specName: string }
   | { command: 'generateDesign' }
   | { command: 'generateTasks' }
@@ -65,8 +65,8 @@ export type ToExtensionMessage =
   | { command: 'importFromFile' }
   | { command: 'setRequirementsFormat'; format: 'given-when-then' | 'ears' }
   | { command: 'cancelTaskRun' }
-  | { command: 'startClarification'; specName: string; description: string; specType: string; template: string; jiraUrl?: string }
-  | { command: 'submitClarification'; specName: string; description: string; specType: string; qaTranscript: string; template: string; jiraUrl?: string };
+  | { command: 'startClarification'; specName: string; description: string; specType: string; template: string }
+  | { command: 'submitClarification'; specName: string; description: string; specType: string; qaTranscript: string; template: string };
 
 // ── Extension → Webview ────────────────────────────────────────────────────────
 

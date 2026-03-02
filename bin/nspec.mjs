@@ -9,6 +9,8 @@
  *   nspec cascade <name> [--from <stage>]
  *   nspec status [name]
  *   nspec refine <name> <stage> --feedback "..."
+ *   nspec explain-prompt <name> <stage>
+ *   nspec lint-customization [name]
  *
  * Env:
  *   NSPEC_API_KEY   — OpenAI or Anthropic API key (required for generate/verify/cascade/refine)
@@ -24,6 +26,7 @@ import fs from 'fs';
 const require = createRequire(import.meta.url);
 const store = require('../out/core/specStore.js');
 const prompts = require('../out/core/prompts.js');
+const promptAssembly = require('../out/core/promptAssembly.js');
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
@@ -121,18 +124,19 @@ function parseHealthScore(text) {
 
 function countUncovered(text) { return (text.match(/UNCOVERED/gi) || []).length; }
 
-function buildPromptContext(specName) {
-  const specConfig = store.readConfig(specsDir, specName);
-  const wsConfig = store.loadWorkspaceConfig(specsDir);
-  const requirementsFormat =
-    specConfig?.requirementsFormat ?? wsConfig?.requirementsFormat ?? undefined;
-  return {
-    title: specName,
-    role: store.loadRole(specsDir, specName) || undefined,
-    steering: store.loadSteering(specsDir, specName) || undefined,
-    extraSections: [],
-    requirementsFormat,
-  };
+function assembleStagePrompt(specName, stage, options = {}) {
+  return promptAssembly.assembleSystemPrompt({
+    specsRoot: specsDir,
+    specName,
+    stage,
+    title: options.title || specName,
+    requirementsFormatOverride: options.requirementsFormatOverride,
+    lightDesignOverride: options.lightDesignOverride,
+  });
+}
+
+function buildPromptContext(specName, stage = 'requirements', options = {}) {
+  return assembleStagePrompt(specName, stage, options).context;
 }
 
 function getWorkspaceContext(specName, stage) {
@@ -140,6 +144,9 @@ function getWorkspaceContext(specName, stage) {
   if (stage !== 'design' && stage !== 'tasks') return '';
   return store.buildWorkspaceContext(process.cwd(), specName);
 }
+
+const STEERING_FILE_WARN_BYTES = 12 * 1024;
+const STEERING_TOTAL_WARN_BYTES = 48 * 1024;
 
 // ── Commands ─────────────────────────────────────────────────────────────────
 
@@ -227,21 +234,11 @@ async function cmdGenerate() {
       store.writeSpecConfig(specsDir, folderName, existing);
     }
   }
-
-  const ctx = buildPromptContext(folderName);
-
-  // CLI flag overrides config for this run
-  if (formatArg && stage === 'requirements') {
-    ctx.requirementsFormat = formatArg;
-  }
-
-  // Load extra sections if present
-  ctx.extraSections = store.loadExtraSections(specsDir, folderName, stage);
-
-  // Check for custom prompt override
-  const customPrompt = store.loadCustomPrompt(specsDir, folderName, stage);
-
-  let systemPrompt;
+  const assembled = assembleStagePrompt(folderName, stage, {
+    requirementsFormatOverride: formatArg && stage === 'requirements' ? formatArg : undefined,
+  });
+  const ctx = assembled.context;
+  const systemPrompt = assembled.systemPrompt;
   let userPrompt;
 
   if (stage === 'verify') {
@@ -252,7 +249,6 @@ async function cmdGenerate() {
       console.error('Error: verify requires requirements, design, and tasks stages to exist.');
       process.exit(1);
     }
-    systemPrompt = customPrompt || prompts.buildSystemPrompt('verify', ctx);
     userPrompt = prompts.buildVerificationPrompt(req, des, tasks);
   } else if (stage === 'requirements') {
     if (!description) {
@@ -262,18 +258,15 @@ async function cmdGenerate() {
     if (ctx.requirementsFormat === 'ears') {
       process.stderr.write('  (EARS format) ');
     }
-    systemPrompt = customPrompt || prompts.buildSystemPrompt('requirements', ctx);
     userPrompt = description;
   } else if (stage === 'design') {
     const req = store.readStage(specsDir, folderName, 'requirements');
     if (!req) { console.error('Error: requirements stage must exist before design.'); process.exit(1); }
-    systemPrompt = customPrompt || prompts.buildSystemPrompt('design', ctx);
     const wsContext = getWorkspaceContext(folderName, stage);
     userPrompt = wsContext ? `${req}\n\n${wsContext}` : req;
   } else if (stage === 'tasks') {
     const des = store.readStage(specsDir, folderName, 'design');
     if (!des) { console.error('Error: design stage must exist before tasks.'); process.exit(1); }
-    systemPrompt = customPrompt || prompts.buildSystemPrompt('tasks', ctx);
     const wsContext = getWorkspaceContext(folderName, stage);
     userPrompt = wsContext ? `${des}\n\n${wsContext}` : des;
   }
@@ -334,12 +327,13 @@ async function cmdVerify() {
     process.exit(1);
   }
 
-  const ctx = buildPromptContext(folderName);
+  const verifyAssembly = assembleStagePrompt(folderName, 'verify');
+  const ctx = verifyAssembly.context;
   let result;
 
   if (scheme === 'audit') {
     process.stderr.write('  Verifying (audit)...');
-    const sys = prompts.buildSystemPrompt('verify', ctx);
+    const sys = verifyAssembly.systemPrompt;
     const user = prompts.buildVerificationPrompt(req, des, tasks);
     result = await callLLM(sys, user);
   } else if (scheme === 'cove') {
@@ -355,7 +349,7 @@ async function cmdVerify() {
   } else {
     // committee
     process.stderr.write('  Audit + CoVe questions (parallel)...');
-    const auditSys = prompts.buildSystemPrompt('verify', ctx);
+    const auditSys = verifyAssembly.systemPrompt;
     const auditUser = prompts.buildVerificationPrompt(req, des, tasks);
     const qSys = prompts.buildCoveQuestionsSystem(ctx);
     const qUser = prompts.buildCoveQuestionsUserPrompt(req, des, tasks);
@@ -406,7 +400,6 @@ async function cmdCascade() {
     process.exit(1);
   }
 
-  const ctx = buildPromptContext(folderName);
   const startIdx = PIPELINE_ORDER.indexOf(from);
 
   // Load vibeContext once — if the spec was created via vibe-to-spec, inject
@@ -420,8 +413,8 @@ async function cmdCascade() {
 
   for (let i = startIdx; i < PIPELINE_ORDER.length; i++) {
     const stage = PIPELINE_ORDER[i];
-    ctx.extraSections = store.loadExtraSections(specsDir, folderName, stage);
-    const customPrompt = store.loadCustomPrompt(specsDir, folderName, stage);
+    const assembled = assembleStagePrompt(folderName, stage);
+    const sys = assembled.systemPrompt;
 
     if (stage === 'requirements') {
       // Cannot regenerate requirements without description — skip
@@ -436,7 +429,6 @@ async function cmdCascade() {
       const req = store.readStage(specsDir, folderName, 'requirements');
       if (!req) { console.error('Error: requirements must exist.'); process.exit(1); }
       process.stderr.write('  Generating design...');
-      const sys = customPrompt || prompts.buildSystemPrompt('design', ctx);
       const wsContext = getWorkspaceContext(folderName, stage);
       let userContent = wsContext ? `${req}\n\n${wsContext}` : req;
       if (crossContext) userContent = `${userContent}\n\n${crossContext}`;
@@ -448,7 +440,6 @@ async function cmdCascade() {
       const des = store.readStage(specsDir, folderName, 'design');
       if (!des) { console.error('Error: design must exist.'); process.exit(1); }
       process.stderr.write('  Generating tasks...');
-      const sys = customPrompt || prompts.buildSystemPrompt('tasks', ctx);
       const wsContext = getWorkspaceContext(folderName, stage);
       let userContent = wsContext ? `${des}\n\n${wsContext}` : des;
       if (crossContext) userContent = `${userContent}\n\n${crossContext}`;
@@ -466,7 +457,6 @@ async function cmdCascade() {
         process.exit(1);
       }
       process.stderr.write(`  Verifying (${scheme})...`);
-      const sys = customPrompt || prompts.buildSystemPrompt('verify', ctx);
       const user = prompts.buildVerificationPrompt(req, des, tasks);
       const result = await callLLM(sys, user);
       store.writeStage(specsDir, folderName, 'verify', result);
@@ -498,12 +488,10 @@ async function cmdBackfill() {
     console.error('Error: design.md must exist to backfill requirements.');
     process.exit(1);
   }
-
-  const ctx = buildPromptContext(folderName);
-  ctx.extraSections = store.loadExtraSections(specsDir, folderName, 'requirements');
-  const customPrompt = store.loadCustomPrompt(specsDir, folderName, 'requirements');
-
-  const systemPrompt = customPrompt || prompts.buildRequirementsFromDesignPrompt(ctx);
+  const assembled = assembleStagePrompt(folderName, 'requirements');
+  const systemPrompt = assembled.sourceMap.promptOverrideSource
+    ? assembled.systemPrompt
+    : prompts.buildRequirementsFromDesignPrompt(assembled.context);
 
   process.stderr.write('  Backfilling requirements from design...');
   const result = await callLLM(systemPrompt, design);
@@ -796,9 +784,7 @@ Each spec lives in \`.specs/<name>/\` as markdown files. This gives you a tracea
 │   ├── _progress.json          # Task completion tracking
 │   ├── _steering.md            # (optional) Domain context for this spec
 │   ├── _role.md                # (optional) Override the AI's role preamble
-│   ├── _prompts/               # (optional) Full prompt overrides per stage
-│   │   └── requirements.md, design.md, tasks.md, verify.md
-│   └── _sections/              # (optional) Extra output sections per stage
+│   └── _prompts/               # (optional) Full prompt overrides per stage
 │       └── requirements.md, design.md, tasks.md, verify.md
 ├── steering/                   # (optional) Workspace-wide steering files
 │   ├── product.md              # Product vision, target users
@@ -915,7 +901,6 @@ To customize AI behavior for a specific spec:
 - **\`_steering.md\`** — Add domain context (e.g., "This is a healthcare app, all data must be HIPAA compliant")
 - **\`_role.md\`** — Override the AI's role (e.g., "You are a mobile game designer")
 - **\`_prompts/<stage>.md\`** — Completely replace the system prompt for a stage
-- **\`_sections/<stage>.md\`** — Add extra output sections (one per line)
 
 Workspace-wide files in \`.specs/\` apply to all specs. Spec-specific files override workspace-wide.
 
@@ -1016,10 +1001,8 @@ async function cmdImport() {
   if (transform) {
     requireApiKey();
     const content = fs.readFileSync(filePath, 'utf-8');
-    const ctx = buildPromptContext(folderName);
-    ctx.extraSections = store.loadExtraSections(specsDir, folderName, stage);
-    const customPrompt = store.loadCustomPrompt(specsDir, folderName, stage);
-    const systemPrompt = customPrompt || prompts.buildSystemPrompt(stage, ctx);
+    const assembled = assembleStagePrompt(folderName, stage);
+    const systemPrompt = assembled.systemPrompt;
     const userPrompt = `Convert the following document into the proper ${stage} format:\n\n${content}`;
 
     process.stderr.write(`  Transforming and importing ${stage}...`);
@@ -1053,9 +1036,7 @@ async function cmdClarify() {
 
   const folderName = store.toFolderName(name);
   store.createSpecFolder(specsDir, folderName);
-  const ctx = buildPromptContext(folderName);
-  ctx.extraSections = store.loadExtraSections(specsDir, folderName, 'requirements');
-  const customPrompt = store.loadCustomPrompt(specsDir, folderName, 'requirements');
+  const assembled = assembleStagePrompt(folderName, 'requirements');
 
   // Step 1: Ask clarifying questions
   process.stderr.write('  Generating clarification questions...');
@@ -1075,7 +1056,7 @@ async function cmdClarify() {
 
   // Step 3: Generate requirements with clarification context
   const qaTranscript = `Questions:\n${questions}\n\nAnswers:\n${answers}`;
-  const systemPrompt = customPrompt || prompts.buildSystemPrompt('requirements', ctx);
+  const systemPrompt = assembled.systemPrompt;
   const userPrompt = prompts.buildClarifiedRequirementsUserPrompt(description, qaTranscript);
 
   process.stderr.write('  Generating requirements with clarifications...');
@@ -1203,10 +1184,8 @@ async function cmdVibeToSpec() {
   });
 
   // Step 4: Generate requirements from extracted description
-  const ctx = buildPromptContext(folderName);
-  ctx.extraSections = store.loadExtraSections(specsDir, folderName, 'requirements');
-  const customPrompt = store.loadCustomPrompt(specsDir, folderName, 'requirements');
-  const systemPrompt = customPrompt || prompts.buildSystemPrompt('requirements', ctx);
+  const reqAssembly = assembleStagePrompt(folderName, 'requirements');
+  const systemPrompt = reqAssembly.systemPrompt;
 
   // Include transcript as extended context
   const userPrompt = `${extractedDescription}\n\n---\n## Original Conversation Transcript\n${transcript}`;
@@ -1222,9 +1201,7 @@ async function cmdVibeToSpec() {
 
     // Design
     process.stderr.write('  Generating design...');
-    const desCtx = buildPromptContext(folderName);
-    desCtx.extraSections = store.loadExtraSections(specsDir, folderName, 'design');
-    const desSys = store.loadCustomPrompt(specsDir, folderName, 'design') || prompts.buildSystemPrompt('design', desCtx);
+    const desSys = assembleStagePrompt(folderName, 'design').systemPrompt;
     const wsContext = getWorkspaceContext(folderName, 'design');
     const vibeAppend = `\n\n---\n## Conversation Context\n${extractedDescription}`;
     let desUser = wsContext ? `${requirements}\n\n${wsContext}` : requirements;
@@ -1235,9 +1212,7 @@ async function cmdVibeToSpec() {
 
     // Tasks
     process.stderr.write('  Generating tasks...');
-    const taskCtx = buildPromptContext(folderName);
-    taskCtx.extraSections = store.loadExtraSections(specsDir, folderName, 'tasks');
-    const taskSys = store.loadCustomPrompt(specsDir, folderName, 'tasks') || prompts.buildSystemPrompt('tasks', taskCtx);
+    const taskSys = assembleStagePrompt(folderName, 'tasks').systemPrompt;
     const taskWsContext = getWorkspaceContext(folderName, 'tasks');
     let taskUser = taskWsContext ? `${design}\n\n${taskWsContext}` : design;
     taskUser += vibeAppend;
@@ -1248,8 +1223,7 @@ async function cmdVibeToSpec() {
 
     // Verify
     process.stderr.write(`  Verifying (${scheme})...`);
-    const verCtx = buildPromptContext(folderName);
-    const verSys = store.loadCustomPrompt(specsDir, folderName, 'verify') || prompts.buildSystemPrompt('verify', verCtx);
+    const verSys = assembleStagePrompt(folderName, 'verify').systemPrompt;
     const verUser = prompts.buildVerificationPrompt(requirements, design, tasks);
     const verify = await callLLM(verSys, verUser);
     store.writeStage(specsDir, folderName, 'verify', verify);
@@ -1343,6 +1317,179 @@ async function cmdConfig() {
   }
 }
 
+function formatPath(filePath) {
+  return path.relative(process.cwd(), filePath) || filePath;
+}
+
+function collectMarkdownFiles(dirPath) {
+  if (!fs.existsSync(dirPath)) return [];
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectMarkdownFiles(fullPath));
+    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function cmdExplainPrompt() {
+  const name = getPositional(0);
+  const stage = getPositional(1);
+  if (!name || !stage || !store.ALL_STAGES.includes(stage)) {
+    console.error('Usage: nspec explain-prompt <name> <stage>');
+    console.error('Stages: requirements, design, tasks, verify');
+    process.exit(1);
+  }
+
+  const folderName = store.toFolderName(name);
+  const assembled = assembleStagePrompt(folderName, stage);
+  const map = assembled.sourceMap;
+  const reqFormat = stage === 'requirements' ? (assembled.context.requirementsFormat || 'given-when-then') : 'n/a';
+  const lightDesign = stage === 'design' ? (assembled.context.lightDesign ? 'true' : 'false') : 'n/a';
+  const steering = map.steeringSources.length > 0 ? map.steeringSources.map(formatPath).join(', ') : '(none)';
+
+  console.log('Prompt Assembly\n');
+  console.log(`Spec: ${map.specName}`);
+  console.log(`Stage: ${map.stage}`);
+  console.log(`Base template: ${map.baseTemplate}`);
+  console.log(`Workspace config: ${map.workspaceConfigPath ? formatPath(map.workspaceConfigPath) : '(none)'}`);
+  console.log(`Spec config: ${map.specConfigPath ? formatPath(map.specConfigPath) : '(none)'}`);
+  console.log(`Requirements format: ${reqFormat} (${map.requirementsFormatSource})`);
+  console.log(`Light design: ${lightDesign} (${map.lightDesignSource})`);
+  console.log(`Steering sources: ${steering}`);
+  console.log(`Role source: ${map.roleSource ? formatPath(map.roleSource) : '(none)'}`);
+  console.log(`Prompt override: ${map.promptOverrideSource ? formatPath(map.promptOverrideSource) : '(none)'}`);
+  console.log(`Mechanisms: ${map.mechanisms.length > 0 ? map.mechanisms.join(', ') : '(none)'}`);
+}
+
+function cmdLintCustomization() {
+  const name = getPositional(0);
+  const findings = [];
+
+  const push = (level, code, message, filePath = null) => {
+    findings.push({ level, code, message, filePath });
+  };
+
+  const specs = store.listSpecs(specsDir);
+  const targetSpecs = name
+    ? specs.filter((spec) => spec.name === store.toFolderName(name))
+    : specs;
+
+  if (name && targetSpecs.length === 0) {
+    console.error(`Error: spec not found: ${store.toFolderName(name)}`);
+    process.exit(1);
+  }
+
+  const workspaceSectionsFiles = collectMarkdownFiles(path.join(specsDir, '_sections'));
+  for (const filePath of workspaceSectionsFiles) {
+    push('error', 'SECTIONS_REMOVED', '_sections is no longer supported; move these instructions into _prompts/<stage>.md.', filePath);
+  }
+
+  for (const spec of targetSpecs) {
+    const specSectionsFiles = collectMarkdownFiles(path.join(specsDir, spec.name, '_sections'));
+    for (const filePath of specSectionsFiles) {
+      push('error', 'SECTIONS_REMOVED', '_sections is no longer supported; move these instructions into _prompts/<stage>.md.', filePath);
+    }
+  }
+
+  const steeringFiles = [];
+  steeringFiles.push(...collectMarkdownFiles(path.join(specsDir, 'steering')));
+
+  const workspaceSteering = path.join(specsDir, '_steering.md');
+  if (fs.existsSync(workspaceSteering)) steeringFiles.push(workspaceSteering);
+
+  for (const spec of targetSpecs) {
+    const specSteering = path.join(specsDir, spec.name, '_steering.md');
+    if (fs.existsSync(specSteering)) steeringFiles.push(specSteering);
+  }
+
+  let steeringTotal = 0;
+  for (const filePath of steeringFiles) {
+    const bytes = fs.statSync(filePath).size;
+    steeringTotal += bytes;
+    if (bytes > STEERING_FILE_WARN_BYTES) {
+      push(
+        'warn',
+        'STEERING_FILE_SIZE',
+        `Steering file is ${bytes} bytes (recommend <= ${STEERING_FILE_WARN_BYTES} bytes).`,
+        filePath
+      );
+    }
+  }
+  if (steeringTotal > STEERING_TOTAL_WARN_BYTES) {
+    push(
+      'warn',
+      'STEERING_TOTAL_SIZE',
+      `Combined steering content is ${steeringTotal} bytes (recommend <= ${STEERING_TOTAL_WARN_BYTES} bytes).`,
+      path.join(specsDir, 'steering')
+    );
+  }
+
+  const wsConfig = store.loadWorkspaceConfig(specsDir);
+  const wsFormat = wsConfig?.requirementsFormat;
+  if (wsFormat) {
+    for (const spec of targetSpecs) {
+      const cfg = store.readConfig(specsDir, spec.name);
+      if (cfg?.requirementsFormat && cfg.requirementsFormat !== wsFormat) {
+        push(
+          'warn',
+          'REQUIREMENTS_FORMAT_OVERRIDE',
+          `Spec requirementsFormat (${cfg.requirementsFormat}) overrides workspace default (${wsFormat}).`,
+          path.join(specsDir, spec.name, 'spec.config.json')
+        );
+      }
+    }
+  }
+
+  for (const stage of store.ALL_STAGES) {
+    const wsPrompt = path.join(specsDir, '_prompts', `${stage}.md`);
+    if (fs.existsSync(wsPrompt)) {
+      push(
+        'warn',
+        'PROMPT_FULL_OVERRIDE',
+        `Workspace _prompts/${stage}.md fully replaces the built-in ${stage} prompt for all specs.`,
+        wsPrompt
+      );
+    }
+  }
+
+  for (const spec of targetSpecs) {
+    for (const stage of store.ALL_STAGES) {
+      const specPrompt = path.join(specsDir, spec.name, '_prompts', `${stage}.md`);
+      if (fs.existsSync(specPrompt)) {
+        push(
+          'warn',
+          'PROMPT_FULL_OVERRIDE',
+          `Spec _prompts/${stage}.md fully replaces the built-in ${stage} prompt for this spec.`,
+          specPrompt
+        );
+      }
+    }
+  }
+
+  if (findings.length === 0) {
+    console.log('No customization lint findings.');
+    process.exit(0);
+  }
+
+  let errors = 0;
+  let warnings = 0;
+  for (const finding of findings) {
+    if (finding.level === 'error') errors++;
+    else warnings++;
+    const prefix = finding.level === 'error' ? 'ERROR' : 'WARN ';
+    const loc = finding.filePath ? ` (${formatPath(finding.filePath)})` : '';
+    console.log(`${prefix} [${finding.code}] ${finding.message}${loc}`);
+  }
+
+  console.log(`\nSummary: ${errors} error(s), ${warnings} warning(s).`);
+  process.exit(errors > 0 ? 1 : 0);
+}
+
 // ── Main dispatch ────────────────────────────────────────────────────────────
 
 const COMMANDS = {
@@ -1363,6 +1510,8 @@ const COMMANDS = {
   'setup-agents': cmdSetupAgents,
   'setup-steering': cmdSetupSteering,
   'check-tasks': cmdCheckTasks,
+  'explain-prompt': cmdExplainPrompt,
+  'lint-customization': cmdLintCustomization,
   config: cmdConfig,
 };
 
@@ -1387,7 +1536,9 @@ Commands:
   vibe-to-spec <name> [options]      Convert conversation transcript into a spec
   setup-agents                        Generate AGENTS.md for coding agents
   check-tasks <name>                  Scan workspace for task completion evidence
-  setup-steering                      Generate steering files from workspace
+  explain-prompt <name> <stage>       Show exact prompt sources and precedence
+  lint-customization [name]            Lint prompt customization safety and complexity
+  setup-steering                       Generate steering files from workspace
   config [get|set <key> <value>]      View or set workspace-level defaults
 
 Init options:

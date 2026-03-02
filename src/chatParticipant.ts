@@ -1,15 +1,11 @@
 import * as vscode from 'vscode';
 import * as specManager from './specManager';
 import { LMClient } from './lmClient';
-import { parseJiraReference } from './jira';
 import {
   VIBE_TO_SPEC_SYSTEM,
-  buildVibeToSpecPrompt,
-  buildSystemPrompt,
-  buildRefinementPrompt,
+  buildVibeToSpecPrompt,  buildRefinementPrompt,
   REFINE_SYSTEM,
 } from './prompts';
-import type { PromptContext } from './prompts';
 
 // ── Registration ─────────────────────────────────────────────────────────────
 
@@ -135,25 +131,16 @@ async function handleSpecCommand(
 
   // Step 6: Generate requirements
   stream.progress('Generating requirements...');
-  const ctx: PromptContext = {
+  const assembled = specManager.assembleSystemPrompt(folderName, 'requirements', {
     title: specName,
-    role: specManager.loadRole(folderName) ?? undefined,
-    steering: specManager.loadSteering(folderName) ?? undefined,
-    extraSections: specManager.loadExtraSections(folderName, 'requirements'),
-  };
-  const systemPrompt =
-    specManager.loadCustomPrompt(folderName, 'requirements') ||
-    buildSystemPrompt('requirements', ctx);
+  });
+  if (!assembled) {
+    stream.markdown('Unable to assemble requirements prompt context.');
+    return {};
+  }
+  const systemPrompt = assembled.systemPrompt;
 
-  const jiraRefs = extractJiraReferences(`${request.prompt}\n${transcript}`);
-  const jiraContextBlock =
-    jiraRefs.length > 0
-      ? `\n\n## Jira Context\n${jiraRefs
-          .map((ref) => `- Jira issue reference: ${ref.raw} (key: ${ref.issueKey})`)
-          .join('\n')}\nUse the Jira MCP/context provider to fetch these tickets before drafting requirements.`
-      : '';
-
-  const userPrompt = `${extractedDescription}\n\n---\n## Original Conversation Transcript\n${transcript}${jiraContextBlock}`;
+  const userPrompt = `${extractedDescription}\n\n---\n## Original Conversation Transcript\n${transcript}`;
   let requirements = '';
 
   await ai.streamCompletion(
@@ -439,21 +426,3 @@ function extractSpecName(prompt: string): string | null {
   return null;
 }
 
-function extractJiraReferences(text: string): { raw: string; issueKey: string }[] {
-  const refs = new Map<string, { raw: string; issueKey: string }>();
-  const urlLike = text.match(/https?:\/\/[^\s)]+/gi) ?? [];
-  for (const candidate of urlLike) {
-    const parsed = parseJiraReference(candidate);
-    if (!parsed) continue;
-    refs.set(`${parsed.issueKey}:${parsed.raw}`, { raw: parsed.raw, issueKey: parsed.issueKey });
-  }
-
-  const keys = text.match(/\b[A-Z][A-Z0-9]+-\d+\b/gi) ?? [];
-  for (const key of keys) {
-    const parsed = parseJiraReference(key);
-    if (!parsed) continue;
-    refs.set(`${parsed.issueKey}:${parsed.raw}`, { raw: parsed.raw, issueKey: parsed.issueKey });
-  }
-
-  return Array.from(refs.values()).slice(0, 5);
-}

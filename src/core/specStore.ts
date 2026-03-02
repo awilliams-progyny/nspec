@@ -104,16 +104,6 @@ export function loadRole(specsRoot: string, specName: string): string | null {
   return null;
 }
 
-export function loadExtraSections(specsRoot: string, specName: string, stage: Stage): string[] {
-  const filePath = path.join(specsRoot, specName, '_sections', `${stage}.md`);
-  const content = readFileOrNull(filePath);
-  if (!content) return [];
-  return content
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0 && !l.startsWith('#'));
-}
-
 export function hasCustomPrompts(specsRoot: string, specName: string): boolean {
   const dir = path.join(specsRoot, specName, PROMPTS_DIR);
   if (!fs.existsSync(dir)) return false;
@@ -134,7 +124,7 @@ export function scaffoldCustomPrompts(specsRoot: string, specName: string): void
 /**
  * Writes a tree of annotated example files into .specs/examples/.
  * Shows users how to customize nSpec behavior using steering files,
- * role overrides, prompt overrides, and extra sections — without touching
+ * role overrides and prompt overrides — without touching
  * any live spec data.
  */
 export function scaffoldExamples(specsRoot: string): string[] {
@@ -142,9 +132,7 @@ export function scaffoldExamples(specsRoot: string): string[] {
   const steeringDir = path.join(examplesDir, 'steering');
   const perSpecDir = path.join(examplesDir, 'per-spec');
   const promptsDir = path.join(perSpecDir, '_prompts');
-  const sectionsDir = path.join(perSpecDir, '_sections');
-
-  for (const dir of [steeringDir, promptsDir, sectionsDir]) {
+  for (const dir of [steeringDir, promptsDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -182,7 +170,6 @@ Add as many as you like — they are loaded alphabetically.
 | \`per-spec/_steering.md\` | \`.specs/<name>/_steering.md\` |
 | \`per-spec/_role.md\` | \`.specs/<name>/_role.md\` |
 | \`per-spec/_prompts/requirements.md\` | \`.specs/<name>/_prompts/requirements.md\` |
-| \`per-spec/_sections/tasks.md\` | \`.specs/<name>/_sections/tasks.md\` |
 
 Replace \`<name>\` with your spec's folder name (e.g. \`user-auth\`).
 
@@ -315,20 +302,6 @@ making assumptions.
 `
   );
 
-  // ── Per-spec extra sections ─────────────────────────────────────────────────
-  write(
-    path.join(sectionsDir, 'tasks.md'),
-    `# Extra Sections for Tasks Stage
-<!-- Copy this file to .specs/<name>/_sections/tasks.md -->
-<!-- Each non-blank, non-heading line is appended as an extra output section. -->
-<!-- The AI generates content for each section you list here. -->
-
-Definition of Done
-Testing Checklist
-Rollback Plan
-`
-  );
-
   return written;
 }
 
@@ -435,7 +408,6 @@ export interface TemplateInfo {
   id: TemplateName;
   name: string;
   description: string;
-  sections: Record<string, string[]>;
 }
 
 export const TEMPLATE_REGISTRY: TemplateInfo[] = [
@@ -443,56 +415,26 @@ export const TEMPLATE_REGISTRY: TemplateInfo[] = [
     id: 'rest-api',
     name: 'REST API',
     description: 'CRUD endpoints, auth, validation',
-    sections: {
-      requirements: ['API Routes', 'Error Codes', 'Rate Limits'],
-      design: ['Endpoint Specifications', 'Authentication Flow', 'Request/Response Schemas'],
-      tasks: [],
-      verify: ['API Coverage Matrix'],
-    },
   },
   {
     id: 'game-feature',
     name: 'Game Feature',
     description: 'Player-facing feature for a game',
-    sections: {
-      requirements: ['Game Mechanics', 'Player Experience', 'Balance'],
-      design: ['Game Loop Integration', 'State Management', 'Asset Requirements'],
-      tasks: [],
-      verify: ['Gameplay Coverage'],
-    },
   },
   {
     id: 'ml-experiment',
     name: 'ML Experiment',
     description: 'Model training / evaluation pipeline',
-    sections: {
-      requirements: ['Data Requirements', 'Metrics', 'Baselines'],
-      design: ['Model Architecture', 'Training Pipeline', 'Evaluation Strategy'],
-      tasks: [],
-      verify: ['Experiment Reproducibility'],
-    },
   },
   {
     id: 'cli-tool',
     name: 'CLI Tool',
     description: 'Command-line application',
-    sections: {
-      requirements: ['Commands', 'Flags', 'Output Format'],
-      design: ['Command Parser', 'Plugin Architecture', 'Configuration'],
-      tasks: [],
-      verify: ['Command Coverage'],
-    },
   },
   {
     id: 'library-sdk',
     name: 'Library / SDK',
     description: 'Reusable package with public API',
-    sections: {
-      requirements: ['Public API', 'Compatibility', 'Versioning'],
-      design: ['Module Structure', 'Type System', 'Error Handling'],
-      tasks: [],
-      verify: ['API Surface Coverage'],
-    },
   },
 ];
 
@@ -509,15 +451,6 @@ export function scaffoldTemplate(specsRoot: string, specName: string, templateId
   // Write _steering.md with domain context
   const steeringContent = `# ${template.name} Spec\n\nThis spec uses the **${template.name}** template (${template.description}).\nGenerated prompts will include domain-specific sections for this type of project.\n`;
   fs.writeFileSync(path.join(specDir, '_steering.md'), steeringContent, 'utf-8');
-
-  // Write _sections/ files with template-specific sections
-  const sectionsDir = path.join(specDir, '_sections');
-  fs.mkdirSync(sectionsDir, { recursive: true });
-  for (const [stage, sections] of Object.entries(template.sections)) {
-    if (sections.length > 0) {
-      fs.writeFileSync(path.join(sectionsDir, `${stage}.md`), sections.join('\n'), 'utf-8');
-    }
-  }
 
   // Write _role.md with template-appropriate role
   const roleMap: Record<string, string> = {

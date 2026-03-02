@@ -10,7 +10,7 @@
 3. Add `explain-prompt` to show exact sources used for a stage prompt.
 4. Add `lint-customization` to detect complexity regressions and unsafe config.
 5. Remove duplicate composition logic in panel, CLI, and chat code paths.
-6. Remove `_sections` from the supported customization surface and flag legacy usage.
+6. Remove `_sections` from runtime, docs, and examples.
 
 ## Goal
 
@@ -22,6 +22,15 @@ Make customization predictable, testable, and easy to debug by reducing composit
 - Fewer “why did this prompt change?” issues.
 - Faster onboarding: users can map desired output changes to one file type.
 - Safer customization with guardrails before generation runs.
+
+## Execution Status (2026-03-02)
+
+- Plan executed.
+- Execution summary: `milestones/spec-customization/EXECUTION-SUMMARY.md`
+- Verification docs:
+  - `milestones/spec-customization/VERIFY-01-BUILD-TEST.md`
+  - `milestones/spec-customization/VERIFY-02-CLI-PROMPT-LINT.md`
+  - `milestones/spec-customization/VERIFY-03-SECTIONS-REMOVAL.md`
 
 ---
 
@@ -50,13 +59,14 @@ Make customization predictable, testable, and easy to debug by reducing composit
 - Source map output for explainability.
 - Lint checks for complexity guardrails.
 - Documentation alignment with enforced runtime behavior.
-- Migration warnings for legacy `_sections` usage.
+- Hard removal of `_sections` behavior and references.
 
 ### Out of Scope
 
 - New customization mechanism types.
 - New profile system.
 - Prompt framework redesign.
+- Backward compatibility or deprecation workflows.
 
 ---
 
@@ -89,7 +99,18 @@ Done when:
 - `buildSystemPrompt` and loader functions are no longer orchestrated directly in those entry points.
 - All generation/refine/import-transform paths use `promptAssembly`.
 
-## Step 3: Add `explain-prompt`
+## Step 3: Remove `_sections` runtime support
+
+Action:
+- Remove `loadExtraSections` usage from prompt assembly and all callers.
+- Remove `_sections` parsing behavior from prompt context/types.
+- Remove template scaffolding that writes `_sections` files.
+
+Done when:
+- `_sections` no longer affects generation.
+- No code path reads `_sections/<stage>.md`.
+
+## Step 4: Add `explain-prompt`
 
 Action:
 - CLI command: `nspec explain-prompt <name> <stage>`.
@@ -105,7 +126,7 @@ Done when:
 - A developer can explain prompt content from one command.
 - Command output matches actual generation behavior.
 
-## Step 4: Add `lint-customization`
+## Step 5: Add `lint-customization`
 
 Action:
 - CLI command: `nspec lint-customization [name]`.
@@ -113,21 +134,21 @@ Action:
   - steering file size threshold warnings
   - conflicting `requirementsFormat` workspace vs spec settings
   - full-override warning when `_prompts/<stage>.md` exists
-  - legacy `_sections` presence warning with migration guidance
+  - `_sections` presence = error
 
 Done when:
 - Lint reports clear actionable findings with file paths.
 - Lint can run in CI non-interactively.
 
-## Step 5: Update docs/examples to runtime truth
+## Step 6: Update docs/examples to runtime truth
 
 Action:
 - Align docs and examples with enforced semantics and explain/lint commands.
 - Keep examples minimal: one clear example per mechanism.
-- Remove `_sections` from recommended examples and docs.
+- Remove `_sections` from docs, templates, and playground examples.
 
 Done when:
-- `SPEC-TAXONOMY.md`, README, and examples describe exactly what runtime does.
+- `SPEC-TAXONOMY.md`, README, AGENTS, and examples describe exactly what runtime does.
 
 ---
 
@@ -141,11 +162,15 @@ Done when:
 - Target: three mechanisms only (steering merge, role replace, prompt full replace).
 - Check: unit tests for each mechanism and precedence order.
 
-3. Explainability coverage
+3. `_sections` elimination
+- Target: zero `_sections` runtime reads and zero `_sections` documentation claims.
+- Check: repo search for `loadExtraSections` and `_sections/<stage>.md` references.
+
+4. Explainability coverage
 - Target: every stage and entry path can be explained.
 - Check: `explain-prompt` output verifies source usage for requirements/design/tasks/verify.
 
-4. Guardrail coverage
+5. Guardrail coverage
 - Target: common complexity regressions are caught before generation.
 - Check: lint fixtures cover pass/fail for each rule.
 
@@ -154,8 +179,8 @@ Done when:
 ## Exit Criteria
 
 - All generation/refine/import-transform prompt assembly is centralized.
+- `_sections` is fully removed from runtime behavior.
 - `explain-prompt` is available and accurate.
 - `lint-customization` is available and useful.
 - Duplicate composition code removed from entry points.
-- `_sections` is removed from the supported customization surface.
 - Docs and examples match runtime behavior.

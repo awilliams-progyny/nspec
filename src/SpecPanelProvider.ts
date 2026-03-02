@@ -7,14 +7,6 @@ import type { ToExtensionMessage, FromExtensionMessage } from './webviewMessages
 import { getWorkspaceRoot } from './workspace';
 import { TaskRunner } from './taskRunner';
 import {
-  fetchJiraIssueForSpec,
-  jiraIssueToPrompt,
-  parseJiraReference,
-  type JiraConfig,
-} from './jira';
-import { getJiraConfigFromRovoMcp } from './rovoMcpCheck';
-import {
-  buildSystemPrompt,
   REFINE_SYSTEM,
   buildRefinementPrompt,
   buildVerificationPrompt,
@@ -24,7 +16,6 @@ import {
   buildClarificationUserPrompt,
   buildClarifiedRequirementsUserPrompt,
 } from './prompts';
-import type { PromptContext } from './prompts';
 
 type Stage = specManager.Stage;
 
@@ -79,13 +70,19 @@ export class SpecPanelProvider {
   }
 
   show() {
-    if (this.panel) {
-      // Always rebuild the webview document so local UI edits show up immediately.
-      this.panel.webview.html = this.buildHtml(this.panel.webview);
-      this.panel.reveal(vscode.ViewColumn.One);
-      return;
+    try {
+      if (this.panel) {
+        // Always rebuild the webview document so local UI edits show up immediately.
+        this.panel.webview.html = this.buildHtml(this.panel.webview);
+        this.panel.reveal(vscode.ViewColumn.One);
+        return;
+      }
+      this.createPanel();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage('nSpec: Failed to open panel - ' + message);
+      console.error('[nSpec] show() failed:', err);
     }
-    this.createPanel();
   }
 
   triggerNewSpec() {
@@ -264,33 +261,40 @@ export class SpecPanelProvider {
   // --- Panel lifecycle -------------------------------------------------------
 
   private createPanel() {
-    this.panel = vscode.window.createWebviewPanel('nspec', 'nSpec', vscode.ViewColumn.One, {
-      enableScripts: true,
-      retainContextWhenHidden: false,
-      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
-    });
+    try {
+      this.panel = vscode.window.createWebviewPanel('nspec', 'nSpec', vscode.ViewColumn.One, {
+        enableScripts: true,
+        retainContextWhenHidden: false,
+        localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
+      });
 
-    this.panel.iconPath = {
-      light: vscode.Uri.joinPath(this.context.extensionUri, 'media', 'icon.png'),
-      dark: vscode.Uri.joinPath(this.context.extensionUri, 'media', 'icon.png'),
-    };
+      this.panel.iconPath = {
+        light: vscode.Uri.joinPath(this.context.extensionUri, 'media', 'icon.png'),
+        dark: vscode.Uri.joinPath(this.context.extensionUri, 'media', 'icon.png'),
+      };
 
-    this.panel.webview.html = this.buildHtml(this.panel.webview);
+      this.panel.webview.html = this.buildHtml(this.panel.webview);
 
-    this.panel.webview.onDidReceiveMessage(
-      (msg: ToExtensionMessage) => this.handleMessage(msg),
-      undefined,
-      this.context.subscriptions
-    );
+      this.panel.webview.onDidReceiveMessage(
+        (msg: ToExtensionMessage) => this.handleMessage(msg),
+        undefined,
+        this.context.subscriptions
+      );
 
-    this.panel.onDidDispose(
-      () => {
-        this.panel = null;
-        this.taskRunner.dispose();
-      },
-      undefined,
-      this.context.subscriptions
-    );
+      this.panel.onDidDispose(
+        () => {
+          this.panel = null;
+          this.taskRunner.dispose();
+        },
+        undefined,
+        this.context.subscriptions
+      );
+    } catch (err) {
+      this.panel = null;
+      const message = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage('nSpec: Failed to create panel - ' + message);
+      console.error('[nSpec] createPanel() failed:', err);
+    }
   }
 
   private postMessage(msg: FromExtensionMessage) {
@@ -311,8 +315,7 @@ export class SpecPanelProvider {
             msg.specName,
             msg.prompt,
             msg.specType,
-            msg.template,
-            msg.jiraUrl
+            msg.template
           );
           break;
 
@@ -445,8 +448,7 @@ export class SpecPanelProvider {
             msg.specName,
             msg.description,
             msg.specType,
-            msg.template,
-            msg.jiraUrl
+            msg.template
           );
           break;
 
@@ -456,8 +458,7 @@ export class SpecPanelProvider {
             msg.description,
             msg.specType,
             msg.qaTranscript,
-            msg.template,
-            msg.jiraUrl
+            msg.template
           );
           break;
       }
@@ -518,55 +519,17 @@ export class SpecPanelProvider {
     specName: string,
     prompt: string,
     specType?: string,
-    template?: string,
-    jiraUrl?: string
+    template?: string
   ) {
     if (!(await this.ensureWorkspaceOpen())) return;
     let effectivePrompt = prompt?.trim() || '';
-
-    if (jiraUrl?.trim()) {
-      const jiraRef = parseJiraReference(jiraUrl.trim());
-      if (!jiraRef) {
-        vscode.window.showErrorMessage(
-          'nSpec: Invalid Jira reference. Use a Jira issue URL or key (e.g. ET-1905).'
-        );
-        return;
-      }
-      const workspaceRoot = this.getWorkspaceRoot();
-      const configPath = vscode.workspace
-        .getConfiguration('nspec')
-        .get<string>('rovoMcpConfigPath');
-      const jiraFromMcp = getJiraConfigFromRovoMcp(workspaceRoot, configPath);
-      if (!jiraFromMcp.source) {
-        vscode.window.showErrorMessage(
-          'nSpec: Jira import requires Rovo MCP configuration. Set nSpec.rovoMcpConfigPath or provide .cursor/mcp.json / .codex/config.toml with Atlassian credentials.'
-        );
-        return;
-      }
-      const jiraConfig: JiraConfig = {
-        baseUrl: jiraFromMcp.baseUrl,
-        email: jiraFromMcp.email,
-        apiToken: jiraFromMcp.apiToken,
-      };
-      try {
-        const issue = await fetchJiraIssueForSpec(jiraRef.raw, jiraConfig);
-        const ticketPrompt = jiraIssueToPrompt(issue);
-        effectivePrompt = effectivePrompt ? `${ticketPrompt}\n\n${effectivePrompt}` : ticketPrompt;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        vscode.window.showErrorMessage(`nSpec: ${msg}`);
-        return;
-      }
-    }
 
     if (!specName?.trim()) {
       vscode.window.showWarningMessage('nSpec: Enter a spec name.');
       return;
     }
     if (!effectivePrompt) {
-      vscode.window.showWarningMessage(
-        'nSpec: Enter a feature description or a Jira issue URL/ID.'
-      );
+      vscode.window.showWarningMessage('nSpec: Enter a feature description.');
       return;
     }
 
@@ -617,8 +580,7 @@ export class SpecPanelProvider {
     specName: string,
     description: string,
     _specType: string,
-    _template: string,
-    _jiraUrl?: string
+    _template: string
   ) {
     if (!specName?.trim() || !description?.trim()) {
       this.postMessage({
@@ -659,8 +621,7 @@ export class SpecPanelProvider {
     description: string,
     specType: string,
     qaTranscript: string,
-    template: string,
-    _jiraUrl?: string
+    template: string
   ) {
     if (!(await this.ensureWorkspaceOpen())) return;
     if (!specName?.trim() || !description?.trim()) {
@@ -775,16 +736,14 @@ export class SpecPanelProvider {
     }
 
     const content = fs.readFileSync(filePath, 'utf-8');
-    const specConfig = specManager.readConfig(this.state.activeSpec);
-    const ctx: PromptContext = {
+    const assembled = specManager.assembleSystemPrompt(this.state.activeSpec, stage, {
       title: this.state.activeSpec,
-      steering: specManager.loadSteering(this.state.activeSpec) ?? undefined,
-      extraSections: specManager.loadExtraSections(this.state.activeSpec, stage),
-      lightDesign: stage === 'design' ? specConfig?.lightDesign : undefined,
-      requirementsFormat: stage === 'requirements' ? specConfig?.requirementsFormat : undefined,
-    };
-    const systemPrompt =
-      specManager.loadCustomPrompt(this.state.activeSpec, stage) || buildSystemPrompt(stage, ctx);
+    });
+    if (!assembled) {
+      this.postMessage({ type: 'error', message: 'Unable to assemble prompt context.' });
+      return;
+    }
+    const systemPrompt = assembled.systemPrompt;
     const userPrompt = `Convert the following document into the proper ${stage} format for this spec.\n\n---\n\n${content}`;
 
     let accumulated = '';
@@ -952,25 +911,17 @@ export class SpecPanelProvider {
     this.state.cancelToken = cts;
 
     const specName = this.state.activeSpec ?? '';
+    const assembled = specManager.assembleSystemPrompt(specName, stage, { title: specTitle });
+    if (!assembled) {
+      this.state.generating = false;
+      this.state.cancelToken = null;
+      this.postMessage({ type: 'error', message: 'Unable to assemble prompt context.' });
+      return;
+    }
 
-    // Full override from _prompts/ takes precedence
-    const customPrompt = specManager.loadCustomPrompt(specName, stage);
-    let systemPrompt: string;
-
-    if (customPrompt) {
-      systemPrompt = customPrompt.replace(/{title}/g, specTitle);
+    const systemPrompt = assembled.systemPrompt;
+    if (assembled.sourceMap.promptOverrideSource) {
       this.postMessage({ type: 'usingCustomPrompt', stage });
-    } else {
-      const specConfig = specManager.readConfig(specName);
-      const ctx: PromptContext = {
-        title: specTitle,
-        role: specManager.loadRole(specName) ?? undefined,
-        steering: specManager.loadSteering(specName) ?? undefined,
-        extraSections: specManager.loadExtraSections(specName, stage),
-        lightDesign: stage === 'design' ? specConfig?.lightDesign : undefined,
-        requirementsFormat: stage === 'requirements' ? specConfig?.requirementsFormat : undefined,
-      };
-      systemPrompt = buildSystemPrompt(stage, ctx);
     }
 
     // Inject workspace context for design and tasks stages
@@ -1158,38 +1109,34 @@ export class SpecPanelProvider {
       return;
     }
 
-    const prompt = [
-      `Read the spec at ${specPath}/ (requirements.md, design.md, tasks.md).`,
-      'Implement only the selected tasks listed below, in order.',
-      'Skip tasks that are not selected and skip tasks already marked done.',
-      'Execute commands and edits directly until the selected tasks are complete.',
-      '',
-      'Selected tasks:',
-      ...selectedTasks.map((task, index) => `${index + 1}. ${task.label}`),
-      '',
-      'When done, report a short summary of files changed and tests run.',
-    ].join('\n');
+    const prompt = this.buildRunCheckedPrompt(specPath, selectedTasks);
 
     const allCommands = new Set(await vscode.commands.getCommands(true));
-    if (!allCommands.has('codex.startSession')) {
+    const startResult = await this.startCodexSession(
+      prompt,
+      specsFolder,
+      this.state.activeSpec,
+      allCommands
+    );
+
+    if (!startResult.started) {
+      const availableHint =
+        startResult.availableCodexCommands.length > 0
+          ? ' Available Codex commands: ' +
+            startResult.availableCodexCommands.slice(0, 6).join(', ')
+          : '';
       this.postMessage({
         type: 'error',
         message:
-          'Codex command not found (`codex.startSession`). Install/enable Codex and try Run checked again.',
+          'Failed to start Codex session from nSpec. Open Codex and retry Run checked.' +
+          availableHint,
       });
       return;
     }
 
-    const started = await this.startLegacyCodexSession(prompt, specsFolder, this.state.activeSpec);
-    if (!started) {
-      this.postMessage({
-        type: 'error',
-        message: 'Failed to start Codex session from nSpec. Open Codex and retry Run checked.',
-      });
-      return;
-    }
-
-    vscode.window.showInformationMessage('nSpec: Run checked sent to Codex and auto-submitted.');
+    vscode.window.showInformationMessage(
+      'nSpec: Run checked sent to Codex via ' + startResult.commandId + ' and auto-submitted.'
+    );
   }
 
   private getSpecContextFiles(specsFolder: string, specName: string): string[] {
@@ -1201,7 +1148,76 @@ export class SpecPanelProvider {
       .filter((filePath) => fs.existsSync(filePath));
   }
 
-  private async startLegacyCodexSession(
+  private trimForPrompt(text: string, maxChars = 8000): string {
+    if (!text) return '';
+    const compact = text.trim();
+    if (compact.length <= maxChars) return compact;
+    return compact.slice(0, maxChars) + '\n\n[...truncated by nSpec for prompt size]';
+  }
+
+  private buildRunCheckedPrompt(
+    specPath: string,
+    selectedTasks: Array<{ label: string }>
+  ): string {
+    const req = this.trimForPrompt(this.state.contents.requirements || '', 6000);
+    const des = this.trimForPrompt(this.state.contents.design || '', 6000);
+    const tasks = this.trimForPrompt(this.state.contents.tasks || '', 8000);
+
+    return [
+      `Read the spec at ${specPath}/ (requirements.md, design.md, tasks.md).`,
+      'Implement only the selected tasks listed below, in order.',
+      'Skip tasks that are not selected and skip tasks already marked done.',
+      'Execute commands and edits directly until the selected tasks are complete.',
+      'Do not ask for additional confirmation. Start executing immediately.',
+      '',
+      'Selected tasks:',
+      ...selectedTasks.map((task, index) => `${index + 1}. ${task.label}`),
+      '',
+      'Context snapshots (same content is also attached when supported):',
+      '---',
+      '## requirements.md',
+      req || '(empty)',
+      '---',
+      '## design.md',
+      des || '(empty)',
+      '---',
+      '## tasks.md',
+      tasks || '(empty)',
+      '',
+      'When done, report a short summary of files changed and tests run.',
+    ].join('\n');
+  }
+
+  private getCodexCommandCandidates(allCommands: Set<string>): string[] {
+    const preferred = [
+      'codex.startSession',
+      'codex.start',
+      'codex.newChat',
+      'codex.openChat',
+      'codex.chat.start',
+      'codex.sendMessage',
+      'codex.sendPrompt',
+      'codex.runPrompt',
+      'codex.execute',
+      'codex.executePrompt',
+      'codex.chat.send',
+      'codex.chat.submit',
+    ];
+
+    const availableCodex = Array.from(allCommands)
+      .filter((cmd) => cmd.toLowerCase().startsWith('codex.'))
+      .sort();
+
+    const heuristic = availableCodex.filter((cmd) =>
+      /(start|session|chat|prompt|send|run|execute|submit)/i.test(cmd)
+    );
+
+    const ordered = [...preferred.filter((cmd) => allCommands.has(cmd)), ...heuristic];
+    return Array.from(new Set(ordered));
+  }
+
+  private async tryStartCodexWithCommand(
+    commandId: string,
     prompt: string,
     specsFolder: string,
     specName: string
@@ -1209,26 +1225,51 @@ export class SpecPanelProvider {
     const contextFiles = this.getSpecContextFiles(specsFolder, specName);
     const contextUris = contextFiles.map((filePath) => vscode.Uri.file(filePath));
 
-    const payloads: unknown[] = [
-      { prompt, autoSubmit: true, contextFiles },
-      { prompt, autoSubmit: true, contextUris },
-      { prompt, autoSubmit: true, files: contextFiles },
-      { prompt, autoSubmit: true, files: contextUris },
-      { prompt, autoSubmit: true },
-      { prompt },
-      prompt,
+    const attempts: unknown[][] = [
+      [{ prompt, autoSubmit: true, contextFiles }],
+      [{ prompt, autoSubmit: true, contextUris }],
+      [{ prompt, autoSubmit: true, files: contextFiles }],
+      [{ prompt, autoSubmit: true, files: contextUris }],
+      [{ prompt, autoSubmit: true, attachments: contextUris }],
+      [{ prompt, autoSubmit: true, context: contextUris }],
+      [{ prompt, autoSubmit: true }],
+      [{ prompt }],
+      [prompt, contextUris],
+      [prompt, contextFiles],
+      [prompt],
     ];
 
-    for (const payload of payloads) {
+    for (const args of attempts) {
       try {
-        await vscode.commands.executeCommand('codex.startSession', payload);
+        await vscode.commands.executeCommand(commandId, ...args);
         return true;
       } catch {
-        // Try the next payload shape.
+        // Try next shape.
       }
     }
 
     return false;
+  }
+
+  private async startCodexSession(
+    prompt: string,
+    specsFolder: string,
+    specName: string,
+    allCommands: Set<string>
+  ): Promise<{ started: boolean; commandId: string; availableCodexCommands: string[] }> {
+    const availableCodexCommands = Array.from(allCommands)
+      .filter((cmd) => cmd.toLowerCase().startsWith('codex.'))
+      .sort();
+
+    const candidates = this.getCodexCommandCandidates(allCommands);
+    for (const commandId of candidates) {
+      const ok = await this.tryStartCodexWithCommand(commandId, prompt, specsFolder, specName);
+      if (ok) {
+        return { started: true, commandId, availableCodexCommands };
+      }
+    }
+
+    return { started: false, commandId: 'none', availableCodexCommands };
   }
 
   private async handleRunTaskSupervised(taskLabel: string) {
@@ -1452,6 +1493,9 @@ export class SpecPanelProvider {
   private buildHtml(webview: vscode.Webview): string {
     const nonce = getNonce();
     const templatePath = path.join(this.context.extensionPath, 'media', 'panel.html');
+    if (!fs.existsSync(templatePath)) {
+      throw new Error('Missing webview template: ' + templatePath);
+    }
     const template = fs.readFileSync(templatePath, 'utf-8');
 
     const replacements: Record<string, string> = {

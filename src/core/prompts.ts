@@ -9,7 +9,6 @@ export interface PromptContext {
   title: string;
   role?: string; // override the default role preamble
   steering?: string; // domain context injected into every prompt
-  extraSections?: string[]; // additional sections appended to the stage defaults
   /** When true, design should be light and inferred from existing codebase/adjacent components. */
   lightDesign?: boolean;
   /** When 'ears', use EARS-style requirements (WHEN/IF … THE SYSTEM SHALL). */
@@ -20,7 +19,7 @@ export interface PromptContext {
 
 const DEFAULT_ROLE = 'You are a senior software architect practising spec-driven development.';
 
-// Minimal core sections — extensible via _sections/ markdown drops.
+// Minimal core sections used by default stage templates.
 const SECTIONS: Record<Stage, string[]> = {
   requirements: [
     'Overview',
@@ -168,10 +167,9 @@ export function buildSystemPrompt(stage: Stage, ctx: PromptContext): string {
   const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
   const sectionList =
     stage === 'requirements' && useEars ? SECTIONS_EARS_REQUIREMENTS : SECTIONS[stage];
-  const allSections = [...sectionList, ...(ctx.extraSections || [])];
   const sectionsStr =
-    allSections.length > 0
-      ? 'Include these sections:\n' + allSections.map((s) => `- ${s}`).join('\n')
+    sectionList.length > 0
+      ? 'Include these sections:\n' + sectionList.map((s) => '- ' + s).join('\n')
       : '';
 
   const lightDesignNote =
@@ -350,10 +348,9 @@ Guidelines:
 export function buildRequirementsFromDesignPrompt(ctx: PromptContext): string {
   const role = ctx.role || DEFAULT_ROLE;
   const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
-  const allSections = [...SECTIONS.requirements, ...(ctx.extraSections || [])];
   const sectionsStr =
-    allSections.length > 0
-      ? 'Include these sections:\n' + allSections.map((s) => `- ${s}`).join('\n')
+    SECTIONS.requirements.length > 0
+      ? 'Include these sections:\n' + SECTIONS.requirements.map((s) => '- ' + s).join('\n')
       : '';
 
   return REQUIREMENTS_FROM_DESIGN_SYSTEM.replace(/{role}/g, role)

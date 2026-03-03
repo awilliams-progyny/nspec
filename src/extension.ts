@@ -20,7 +20,9 @@ let activationOutputChannel: vscode.OutputChannel | undefined;
 type GenerationProvider = 'lm' | 'codex-ui';
 
 function getGenerationProvider(): GenerationProvider {
-  const mode = vscode.workspace.getConfiguration('nspec').get<string>('generationProvider', 'codex-ui');
+  const mode = vscode.workspace
+    .getConfiguration('nspec')
+    .get<string>('generationProvider', 'codex-ui');
   return mode === 'lm' ? 'lm' : 'codex-ui';
 }
 
@@ -150,7 +152,12 @@ export function activate(context: vscode.ExtensionContext) {
   logActivation('Activation complete');
 }
 
-function formatModelLine(model: { id: string; vendor: string; family: string; name: string }): string {
+function formatModelLine(model: {
+  id: string;
+  vendor: string;
+  family: string;
+  name: string;
+}): string {
   return `${model.id} | ${model.vendor} | ${model.family} | ${model.name}`;
 }
 
@@ -395,7 +402,9 @@ async function validateSetup() {
     report.push('Warnings:');
     for (const warn of warnings) report.push(`- ${warn}`);
   }
-  report.push(errors.length === 0 ? (warnings.length === 0 ? 'Status: OK' : 'Status: WARN') : 'Status: FAIL');
+  report.push(
+    errors.length === 0 ? (warnings.length === 0 ? 'Status: OK' : 'Status: WARN') : 'Status: FAIL'
+  );
 
   for (const line of report) {
     activationOutputChannel?.appendLine(line);
@@ -459,7 +468,9 @@ async function probeCodexWriteTestFile() {
     throw new Error('No workspace folder is open.');
   }
 
-  const specsFolder = vscode.workspace.getConfiguration('nspec').get<string>('specsFolder', '.specs');
+  const specsFolder = vscode.workspace
+    .getConfiguration('nspec')
+    .get<string>('specsFolder', '.specs');
   const probeDir = path.join(wsRoot, specsFolder, '_probe');
   fs.mkdirSync(probeDir, { recursive: true });
 
@@ -516,12 +527,13 @@ async function probeCodexWriteTestFile() {
       startResult.availableCodexCommands.length > 0
         ? ` Commands: ${startResult.availableCodexCommands.join(', ')}`
         : '';
-    throw new Error(
-      `Probe dispatch failed (${startResult.failureReason}).${cmdHint}`
-    );
+    throw new Error(`Probe dispatch failed (${startResult.failureReason}).${cmdHint}`);
   }
 
-  probeMessage(startedAt, `Dispatched via ${startResult.commandId}. Waiting for ${relativeTarget}...`);
+  probeMessage(
+    startedAt,
+    `Dispatched via ${startResult.commandId}. Waiting for ${relativeTarget}...`
+  );
   const ok = await waitForFileContains(targetFile, sentinel, 90_000);
   if (!ok) {
     probeMessage(startedAt, `Timeout waiting for sentinel in ${relativeTarget}`);

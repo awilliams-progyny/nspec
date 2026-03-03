@@ -53,7 +53,10 @@ function marker(model: { id: string; vendor: string; family: string; name?: stri
   return `${model.id} ${model.vendor} ${model.family} ${model.name ?? ''}`.toLowerCase();
 }
 
-function toAvailableModel(model: { id: string; vendor: string; family: string; name?: string }, provider: ProviderKind): AvailableModel {
+function toAvailableModel(
+  model: { id: string; vendor: string; family: string; name?: string },
+  provider: ProviderKind
+): AvailableModel {
   return {
     id: model.id,
     vendor: model.vendor,
@@ -82,7 +85,9 @@ function getBlockedReasons(model: vscode.LanguageModelChat): string[] {
   return reasons;
 }
 
-function summarizeModelRows(models: Array<{ id: string; vendor: string; family: string; name?: string }>): string {
+function summarizeModelRows(
+  models: Array<{ id: string; vendor: string; family: string; name?: string }>
+): string {
   if (!models.length) return '(none)';
   return models
     .map((m) => `${m.id} | ${m.vendor} | ${m.family} | ${m.name ?? ''}`.trim())
@@ -165,21 +170,22 @@ export async function getCodexModelDiagnostics(): Promise<CodexModelDiagnostics>
       const reasons = getBlockedReasons(model);
       return reasons.length ? { model, reasons } : null;
     })
-    .filter((entry): entry is { model: vscode.LanguageModelChat; reasons: string[] } => entry !== null);
+    .filter(
+      (entry): entry is { model: vscode.LanguageModelChat; reasons: string[] } => entry !== null
+    );
 
   const codexCandidates = dedupeById(
     rawCandidates.filter((model) => getBlockedReasons(model).length === 0)
   );
   const selectedModel = codexCandidates[0] ?? null;
 
-  const unavailableReason: CodexModelDiagnostics['unavailableReason'] =
-    selectedModel
-      ? 'none'
-      : allModels.length === 0
-        ? 'noProviders'
-        : allModels.every((m) => getBlockedReasons(m).length > 0)
-          ? 'copilotOnly'
-          : 'noCodex';
+  const unavailableReason: CodexModelDiagnostics['unavailableReason'] = selectedModel
+    ? 'none'
+    : allModels.length === 0
+      ? 'noProviders'
+      : allModels.every((m) => getBlockedReasons(m).length > 0)
+        ? 'copilotOnly'
+        : 'noCodex';
 
   return {
     allModels: allModels.map((m) => toAvailableModel(m, 'vscode-lm')),
@@ -222,7 +228,13 @@ export interface ProposedChange {
 }
 
 interface ChatCompletionChunk {
-  choices?: Array<{ delta?: { content?: string }; message?: { content?: string; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
+  choices?: Array<{
+    delta?: { content?: string };
+    message?: {
+      content?: string;
+      tool_calls?: Array<{ function?: { name?: string; arguments?: string } }>;
+    };
+  }>;
 }
 
 function buildCodexApiError(status: number, bodyText: string, model: string): Error {
@@ -246,7 +258,10 @@ function buildCodexApiError(status: number, bodyText: string, model: string): Er
     );
   }
 
-  if (status === 429 && (errorCode === 'insufficient_quota' || lower.includes('insufficient_quota'))) {
+  if (
+    status === 429 &&
+    (errorCode === 'insufficient_quota' || lower.includes('insufficient_quota'))
+  ) {
     return new Error(
       'Codex API quota exceeded for this API key/project. ' +
         'Check OpenAI billing, project spend limits, and key/project ownership, then retry. ' +

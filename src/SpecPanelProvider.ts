@@ -188,7 +188,10 @@ export class SpecPanelProvider {
     this.completePendingGeneration(content, pending);
   }
 
-  private buildCodexUiInstruction(relativeInstructionPath: string, relativeTargetPath: string): string {
+  private buildCodexUiInstruction(
+    relativeInstructionPath: string,
+    relativeTargetPath: string
+  ): string {
     return [
       `Open and follow this instruction file exactly: ${relativeInstructionPath}`,
       `Edit this target file in-place: ${relativeTargetPath}`,
@@ -317,7 +320,7 @@ export class SpecPanelProvider {
           ? 'No Codex/ChatGPT commands available to run codex-ui provider.'
           : startResult.failureReason === 'no_send_commands'
             ? 'Codex commands were found, but none can submit an instruction from nSpec. Ensure `chatgpt.implementTodo` is available in this VS Code session.'
-          : 'Could not auto-start Codex/ChatGPT command.';
+            : 'Could not auto-start Codex/ChatGPT command.';
       throw new Error(reason + availableHint);
     }
 
@@ -1488,7 +1491,12 @@ export class SpecPanelProvider {
     const prompt = this.buildRunCheckedPrompt(specPath, selectedTasks);
 
     const allCommands = new Set(await vscode.commands.getCommands(true));
-    const startResult = await startCodexSession(prompt, specsFolder, this.state.activeSpec, allCommands);
+    const startResult = await startCodexSession(
+      prompt,
+      specsFolder,
+      this.state.activeSpec,
+      allCommands
+    );
 
     if (!startResult.started) {
       const availableHint =
@@ -1501,7 +1509,7 @@ export class SpecPanelProvider {
           ? 'No Codex/ChatGPT commands are available in this VS Code session. Install/enable the OpenAI extension, then reload the window.'
           : startResult.failureReason === 'no_send_commands'
             ? 'Codex commands are present, but this session does not expose a prompt-submit command (`chatgpt.implementTodo`). Reload VS Code and retry.'
-          : 'Found Codex/ChatGPT commands, but nSpec could not start a Codex session automatically. Open Codex once and retry.';
+            : 'Found Codex/ChatGPT commands, but nSpec could not start a Codex session automatically. Open Codex once and retry.';
       const message = reason + availableHint;
       this.postMessage({
         type: 'error',

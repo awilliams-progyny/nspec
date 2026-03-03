@@ -85,7 +85,12 @@ describe('codexBridge', () => {
   });
 
   it('fails with no_codex_commands when no codex/chatgpt command exists', async () => {
-    const result = await startCodexSession('probe', '.specs', 'bridge-probe', new Set(['nspec.open']));
+    const result = await startCodexSession(
+      'probe',
+      '.specs',
+      'bridge-probe',
+      new Set(['nspec.open'])
+    );
     expect(result.started).toBe(false);
     expect(result.failureReason).toBe('no_codex_commands');
     expect(result.availableCodexCommands).toEqual([]);

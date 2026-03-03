@@ -177,7 +177,9 @@ describe('LMClient.streamCompletion', () => {
 
     await new LMClient().streamCompletion('sys', 'user', vi.fn(), vi.fn(), onError);
 
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Codex API key is not configured'));
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Codex API key is not configured')
+    );
   });
 
   it('surfaces a clear quota error for insufficient_quota', async () => {
@@ -243,24 +245,20 @@ describe('LMClient.sendRequestWithTools', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const changes = await new LMClient().sendRequestWithTools(
-      'sys',
-      'user',
-      [
-        {
-          name: 'writeFile',
-          description: 'Write file',
-          parameters: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'Path' },
-              content: { type: 'string', description: 'Content' },
-            },
-            required: ['path', 'content'],
+    const changes = await new LMClient().sendRequestWithTools('sys', 'user', [
+      {
+        name: 'writeFile',
+        description: 'Write file',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Path' },
+            content: { type: 'string', description: 'Content' },
           },
+          required: ['path', 'content'],
         },
-      ]
-    );
+      },
+    ]);
 
     expect(changes).toEqual([{ type: 'writeFile', path: 'a.txt', content: 'hello' }]);
   });

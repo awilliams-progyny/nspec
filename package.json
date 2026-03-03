@@ -205,7 +205,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "npm run format:check && tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "npm run compile && vsce package",
     "test": "vitest run",

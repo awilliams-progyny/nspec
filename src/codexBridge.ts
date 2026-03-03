@@ -58,7 +58,9 @@ export function getCodexCommandCandidates(allCommands: Set<string>): string[] {
   const heuristicSend = availableCodex.filter((cmd) =>
     /(implementtodo|send|prompt|submit|run|execute)$/i.test(cmd)
   );
-  return Array.from(new Set([...sendPreferred.filter((cmd) => allCommands.has(cmd)), ...heuristicSend]));
+  return Array.from(
+    new Set([...sendPreferred.filter((cmd) => allCommands.has(cmd)), ...heuristicSend])
+  );
 }
 
 async function tryStartCodexWithCommand(

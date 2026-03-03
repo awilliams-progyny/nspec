@@ -1,24 +1,19 @@
 /**
- * Unit tests for LMClient provider selection and routing logic.
- * Run: npm run test
- *
- * These tests mock `vscode` and `fetch` to verify that streamCompletion
- * routes to the correct backend without making real HTTP requests.
+ * Unit tests for LMClient Codex API routing and diagnostics.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// ── Mock vscode before importing LMClient ────────────────────────────────────
-// vi.hoisted ensures these are available inside the vi.mock factory,
-// which vitest hoists to the top of the module before any imports run.
-
-const { mockSelectChatModels, mockGet } = vi.hoisted(() => ({
+const { mockSelectChatModels, configValues } = vi.hoisted(() => ({
   mockSelectChatModels: vi.fn(),
-  mockGet: vi.fn(),
+  configValues: {} as Record<string, string>,
 }));
 
 vi.mock('vscode', () => ({
   workspace: {
-    getConfiguration: () => ({ get: mockGet }),
+    getConfiguration: () => ({
+      get: (key: string, fallback: string) =>
+        Object.prototype.hasOwnProperty.call(configValues, key) ? configValues[key] : fallback,
+    }),
   },
   lm: {
     selectChatModels: mockSelectChatModels,
@@ -33,311 +28,274 @@ vi.mock('vscode', () => ({
     }
     dispose() {}
   },
-  LanguageModelChatMessage: {
-    Assistant: (text: string) => ({ role: 'assistant', content: text }),
-    User: (text: string) => ({ role: 'user', content: text }),
-  },
 }));
 
-import { LMClient } from '../../lmClient';
+import {
+  LMClient,
+  getCodexApiConfig,
+  getCodexApiConfigOrThrow,
+  getCodexModelDiagnostics,
+} from '../../lmClient';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+function setSetting(key: string, value: string) {
+  configValues[key] = value;
+}
 
-function makeVscodeLMModel(id = 'copilot-gpt-4') {
+function clearSettings() {
+  for (const key of Object.keys(configValues)) delete configValues[key];
+}
+
+function makeLMModel(id: string, vendor: string, family: string, name: string) {
+  return { id, vendor, family, name };
+}
+
+function makeSSEBody(payloads: string[]) {
+  let index = 0;
   return {
-    id,
-    vendor: 'GitHub',
-    family: 'gpt-4',
-    name: 'GPT-4 (Copilot)',
-    sendRequest: vi.fn().mockResolvedValue({
-      text: (async function* () {
-        yield 'hello';
-      })(),
+    getReader: () => ({
+      read: async () => {
+        if (index >= payloads.length) return { done: true, value: undefined };
+        const next = payloads[index++];
+        return { done: false, value: new TextEncoder().encode(next) };
+      },
     }),
   };
 }
 
-/** Set up mockGet to simulate an OpenAI direct-API configuration. */
-function useOpenAIConfig(model = 'gpt-4o') {
-  mockGet.mockImplementation((key: string, def?: unknown) => {
-    if (key === 'apiKey') return 'sk-test-openai';
-    if (key === 'apiBaseUrl') return 'https://api.openai.com/v1';
-    if (key === 'apiModel') return model;
-    return def;
-  });
-}
+describe('Codex API config', () => {
+  const prevNspec = process.env.NSPEC_API_KEY;
+  const prevOpenAI = process.env.OPENAI_API_KEY;
 
-/** Set up mockGet to simulate an Anthropic direct-API configuration. */
-function useAnthropicConfig(model = 'claude-3-5-sonnet-20241022') {
-  mockGet.mockImplementation((key: string, def?: unknown) => {
-    if (key === 'apiKey') return 'sk-ant-test';
-    if (key === 'apiBaseUrl') return 'https://api.anthropic.com/v1';
-    if (key === 'apiModel') return model;
-    return def;
-  });
-}
-
-/** Set up mockGet to simulate no API key configured (vscode.lm only). */
-function useNoDirectConfig() {
-  mockGet.mockImplementation((_key: string, def?: unknown) => def ?? '');
-}
-
-// ── Tests: getAvailableModels ────────────────────────────────────────────────
-
-describe('LMClient.getAvailableModels', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearSettings();
+    delete process.env.NSPEC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
   });
 
-  it('returns vscode.lm models when available', async () => {
-    useNoDirectConfig();
-    mockSelectChatModels.mockResolvedValue([makeVscodeLMModel()]);
+  afterEach(() => {
+    if (prevNspec === undefined) delete process.env.NSPEC_API_KEY;
+    else process.env.NSPEC_API_KEY = prevNspec;
+    if (prevOpenAI === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = prevOpenAI;
+  });
+
+  it('uses nspec.apiKey when set', () => {
+    setSetting('apiKey', 'sk-setting');
+    setSetting('apiModel', 'codex-test');
+
+    const cfg = getCodexApiConfig();
+    expect(cfg?.apiKey).toBe('sk-setting');
+    expect(cfg?.model).toBe('codex-test');
+    expect(cfg?.apiKeySource).toBe('setting');
+  });
+
+  it('falls back to NSPEC_API_KEY then OPENAI_API_KEY', () => {
+    process.env.NSPEC_API_KEY = 'sk-nspec';
+    expect(getCodexApiConfig()?.apiKeySource).toBe('NSPEC_API_KEY');
+
+    delete process.env.NSPEC_API_KEY;
+    process.env.OPENAI_API_KEY = 'sk-openai';
+    expect(getCodexApiConfig()?.apiKeySource).toBe('OPENAI_API_KEY');
+  });
+
+  it('throws a clear error when no api key is configured', () => {
+    expect(() => getCodexApiConfigOrThrow()).toThrow('Codex API key is not configured');
+  });
+});
+
+describe('LMClient availability', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearSettings();
+  });
+
+  it('returns one codex-api model when configured', async () => {
+    setSetting('apiKey', 'sk-setting');
+    setSetting('apiModel', 'gpt-5.3-codex');
 
     const client = new LMClient();
     const models = await client.getAvailableModels();
 
     expect(models).toHaveLength(1);
-    expect(models[0].id).toBe('copilot-gpt-4');
-    expect(models[0].provider).toBe('vscode-lm');
-  });
-
-  it('returns direct OpenAI model when API key is set', async () => {
-    useOpenAIConfig('gpt-4o');
-    mockSelectChatModels.mockResolvedValue([]);
-
-    const client = new LMClient();
-    const models = await client.getAvailableModels();
-
-    const directModel = models.find((m) => m.provider === 'openai');
-    expect(directModel).toBeDefined();
-    expect(directModel?.id).toBe('gpt-4o');
-    expect(directModel?.name).toContain('API key');
-  });
-
-  it('returns direct Anthropic model when Anthropic API key is set', async () => {
-    useAnthropicConfig('claude-3-5-sonnet-20241022');
-    mockSelectChatModels.mockResolvedValue([]);
-
-    const client = new LMClient();
-    const models = await client.getAvailableModels();
-
-    const directModel = models.find((m) => m.provider === 'anthropic');
-    expect(directModel).toBeDefined();
-    expect(directModel?.id).toBe('claude-3-5-sonnet-20241022');
-  });
-
-  it('returns both vscode.lm and direct models when both configured', async () => {
-    useOpenAIConfig('gpt-4o');
-    mockSelectChatModels.mockResolvedValue([makeVscodeLMModel()]);
-
-    const client = new LMClient();
-    const models = await client.getAvailableModels();
-
-    expect(models.some((m) => m.provider === 'vscode-lm')).toBe(true);
-    expect(models.some((m) => m.provider === 'openai')).toBe(true);
-  });
-
-  it('returns empty array when nothing configured', async () => {
-    useNoDirectConfig();
-    mockSelectChatModels.mockResolvedValue([]);
-
-    const client = new LMClient();
-    const models = await client.getAvailableModels();
-
-    expect(models).toHaveLength(0);
-  });
-
-  it('returns empty array when vscode.lm throws', async () => {
-    useNoDirectConfig();
-    mockSelectChatModels.mockRejectedValue(new Error('not available'));
-
-    const client = new LMClient();
-    const models = await client.getAvailableModels();
-
-    expect(models).toHaveLength(0);
-  });
-});
-
-// ── Tests: hasAnyModel ───────────────────────────────────────────────────────
-
-describe('LMClient.hasAnyModel', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('returns true when vscode.lm models exist', async () => {
-    useNoDirectConfig();
-    mockSelectChatModels.mockResolvedValue([makeVscodeLMModel()]);
-
-    const client = new LMClient();
+    expect(models[0].provider).toBe('codex-api');
+    expect(models[0].id).toBe('gpt-5.3-codex');
     expect(await client.hasAnyModel()).toBe(true);
   });
 
-  it('returns true when direct API key is configured', async () => {
-    useOpenAIConfig();
-    mockSelectChatModels.mockResolvedValue([]);
-
-    const client = new LMClient();
-    expect(await client.hasAnyModel()).toBe(true);
-  });
-
-  it('returns false when nothing is configured', async () => {
-    useNoDirectConfig();
-    mockSelectChatModels.mockResolvedValue([]);
-
+  it('returns no model when key is not configured', async () => {
     const client = new LMClient();
     expect(await client.hasAnyModel()).toBe(false);
   });
 });
 
-// ── Tests: setSelectedModel / getSelectedModelId ─────────────────────────────
-
-describe('LMClient model selection state', () => {
-  it('starts with no selected model', () => {
-    const client = new LMClient();
-    expect(client.getSelectedModelId()).toBeNull();
-  });
-
-  it('stores selected model id', () => {
-    const client = new LMClient();
-    client.setSelectedModel('gpt-4o');
-    expect(client.getSelectedModelId()).toBe('gpt-4o');
-  });
-
-  it('allows overriding the selected model', () => {
-    const client = new LMClient();
-    client.setSelectedModel('gpt-4o');
-    client.setSelectedModel('claude-3-5-sonnet');
-    expect(client.getSelectedModelId()).toBe('claude-3-5-sonnet');
-  });
-});
-
-// ── Tests: streamCompletion provider routing ─────────────────────────────────
-
-describe('LMClient.streamCompletion provider routing', () => {
+describe('LMClient.streamCompletion', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Replace global fetch with a spy that returns a minimal streaming response
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        body: null,
-        text: async () => '',
-      })
-    );
+    clearSettings();
+    setSetting('apiKey', 'sk-setting');
+    setSetting('apiModel', 'gpt-5.3-codex');
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it('uses vscode.lm when no API key and models available', async () => {
-    useNoDirectConfig();
-    const vsLmModel = makeVscodeLMModel();
-    mockSelectChatModels.mockResolvedValue([vsLmModel]);
+  it('streams chunks from Codex API SSE', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: makeSSEBody([
+        'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"world"}}]}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+      json: async () => ({}),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
-    const client = new LMClient();
+    const onChunk = vi.fn();
     const onDone = vi.fn();
     const onError = vi.fn();
-    const onChunk = vi.fn();
 
-    await client.streamCompletion('sys', 'user', onChunk, onDone, onError);
+    await new LMClient().streamCompletion('sys', 'user', onChunk, onDone, onError);
 
-    expect(vsLmModel.sendRequest).toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/chat/completions'),
+      expect.objectContaining({ method: 'POST' })
+    );
+    expect(onChunk).toHaveBeenCalledWith('hello ');
+    expect(onChunk).toHaveBeenCalledWith('world');
     expect(onDone).toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();
-    expect(vi.mocked(global.fetch)).not.toHaveBeenCalled();
   });
 
-  it('uses direct OpenAI when API key set and provider is openai', async () => {
-    useOpenAIConfig('gpt-4o');
-    mockSelectChatModels.mockResolvedValue([]);
-
-    // Provide a minimal SSE stream
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: {
-        getReader: () => {
-          let done = false;
-          return {
-            read: async () => {
-              if (done) return { done: true, value: undefined };
-              done = true;
-              const text = 'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n\n';
-              return { done: false, value: new TextEncoder().encode(text) };
-            },
-          };
-        },
-      },
-    });
-    vi.stubGlobal('fetch', mockFetch);
-
-    const client = new LMClient();
-    client.setSelectedModel('gpt-4o', 'openai');
-    const onDone = vi.fn();
+  it('fails fast if api key is missing', async () => {
+    clearSettings();
     const onError = vi.fn();
-    const onChunk = vi.fn();
 
-    await client.streamCompletion('sys', 'user', onChunk, onDone, onError);
+    await new LMClient().streamCompletion('sys', 'user', vi.fn(), vi.fn(), onError);
 
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('api.openai.com'),
-      expect.any(Object)
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Codex API key is not configured'));
+  });
+
+  it('surfaces a clear quota error for insufficient_quota', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      body: null,
+      json: async () => ({}),
+      text: async () =>
+        JSON.stringify({
+          error: {
+            message: 'You exceeded your current quota, please check your plan and billing details.',
+            type: 'insufficient_quota',
+            code: 'insufficient_quota',
+          },
+        }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onError = vi.fn();
+
+    await new LMClient().streamCompletion('sys', 'user', vi.fn(), vi.fn(), onError);
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.stringContaining('Codex API quota exceeded for this API key/project')
     );
   });
+});
 
-  it('uses Anthropic endpoint when API key starts with sk-ant', async () => {
-    useAnthropicConfig('claude-3-5-sonnet-20241022');
-    mockSelectChatModels.mockResolvedValue([]);
-
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      body: {
-        getReader: () => {
-          let done = false;
-          return {
-            read: async () => {
-              if (done) return { done: true, value: undefined };
-              done = true;
-              const text =
-                'event: content_block_delta\ndata: {"delta":{"type":"text_delta","text":"hi"}}\n\nevent: message_stop\ndata: {}\n\n';
-              return { done: false, value: new TextEncoder().encode(text) };
-            },
-          };
-        },
-      },
-    });
-    vi.stubGlobal('fetch', mockFetch);
-
-    const client = new LMClient();
-    client.setSelectedModel('claude-3-5-sonnet-20241022', 'anthropic');
-    const onDone = vi.fn();
-    const onError = vi.fn();
-    const onChunk = vi.fn();
-
-    await client.streamCompletion('sys', 'user', onChunk, onDone, onError);
-
-    expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining('anthropic.com'),
-      expect.any(Object)
-    );
+describe('LMClient.sendRequestWithTools', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearSettings();
+    setSetting('apiKey', 'sk-setting');
+    setSetting('apiModel', 'gpt-5.3-codex');
   });
 
-  it('calls onError when no provider configured', async () => {
-    useNoDirectConfig();
-    mockSelectChatModels.mockResolvedValue([]);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
-    const client = new LMClient();
-    const onDone = vi.fn();
-    const onError = vi.fn();
+  it('parses tool calls into proposed changes', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                {
+                  function: {
+                    name: 'writeFile',
+                    arguments: JSON.stringify({ path: 'a.txt', content: 'hello' }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      text: async () => '',
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
-    await client.streamCompletion('sys', 'user', vi.fn(), onDone, onError);
+    const changes = await new LMClient().sendRequestWithTools(
+      'sys',
+      'user',
+      [
+        {
+          name: 'writeFile',
+          description: 'Write file',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'Path' },
+              content: { type: 'string', description: 'Content' },
+            },
+            required: ['path', 'content'],
+          },
+        },
+      ]
+    );
 
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('No AI provider configured'));
-    expect(onDone).not.toHaveBeenCalled();
+    expect(changes).toEqual([{ type: 'writeFile', path: 'a.txt', content: 'hello' }]);
+  });
+});
+
+describe('getCodexModelDiagnostics', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('reports blocked copilot model with unavailable reason', async () => {
+    const copilot = makeLMModel('gpt-5-mini', 'copilot', 'gpt-5-mini', 'GPT-5 mini');
+    mockSelectChatModels.mockImplementation((selector?: { vendor?: string; family?: string }) => {
+      if (!selector) return Promise.resolve([copilot]);
+      return Promise.resolve([]);
+    });
+
+    const diagnostics = await getCodexModelDiagnostics();
+
+    expect(diagnostics.allModels).toHaveLength(1);
+    expect(diagnostics.unavailableReason).toBe('copilotOnly');
+    expect(diagnostics.blockedMatches).toHaveLength(0); // no codex candidates were matched first
+  });
+
+  it('reports selected model when openai selector matches', async () => {
+    const openai = makeLMModel('gpt-5', 'openai', 'gpt-5', 'GPT-5');
+    mockSelectChatModels.mockImplementation((selector?: { vendor?: string; family?: string }) => {
+      if (!selector) return Promise.resolve([openai]);
+      if (selector.vendor === 'openai') return Promise.resolve([openai]);
+      return Promise.resolve([]);
+    });
+
+    const diagnostics = await getCodexModelDiagnostics();
+
+    expect(diagnostics.selectedModel?.id).toBe('gpt-5');
+    expect(diagnostics.unavailableReason).toBe('none');
   });
 });

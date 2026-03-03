@@ -4,7 +4,7 @@ export type StreamChunkCallback = (chunk: string) => void;
 export type StreamDoneCallback = () => void;
 export type StreamErrorCallback = (error: string) => void;
 
-export type ProviderKind = 'vscode-lm' | 'openai' | 'anthropic';
+export type ProviderKind = 'codex-api' | 'vscode-lm';
 
 export interface AvailableModel {
   id: string;
@@ -14,290 +14,185 @@ export interface AvailableModel {
   provider: ProviderKind;
 }
 
-interface DirectConfig {
+export interface CodexApiConfig {
   apiKey: string;
   baseUrl: string;
   model: string;
-  provider: ProviderKind;
+  apiKeySource: 'setting' | 'NSPEC_API_KEY' | 'OPENAI_API_KEY';
 }
 
-function getDirectConfig(): DirectConfig | null {
-  const cfg = vscode.workspace.getConfiguration('nspec');
-  const apiKey = cfg.get<string>('apiKey', '').trim();
-  if (!apiKey) return null;
-  const baseUrl = cfg.get<string>('apiBaseUrl', 'https://api.openai.com/v1').replace(/\/$/, '');
-  const model = cfg.get<string>('apiModel', 'gpt-4o');
-  // Detect Anthropic by URL or key prefix
-  const provider: ProviderKind =
-    baseUrl.includes('anthropic') || apiKey.startsWith('sk-ant') ? 'anthropic' : 'openai';
-  return { apiKey, baseUrl, model, provider };
+export interface CodexModelDiagnostics {
+  allModels: AvailableModel[];
+  selectorMatches: AvailableModel[];
+  markerMatches: AvailableModel[];
+  blockedMatches: Array<{ model: AvailableModel; reasons: string[] }>;
+  codexCandidates: AvailableModel[];
+  selectedModel: AvailableModel | null;
+  unavailableReason: 'none' | 'noProviders' | 'copilotOnly' | 'noCodex';
 }
 
-// ── vscode.lm helpers ──────────────────────────────────────────────────────
+const CODEX_SELECTORS: vscode.LanguageModelChatSelector[] = [
+  { vendor: 'codex' },
+  { vendor: 'openai' },
+  { family: 'codex' },
+];
 
-async function getVSCodeLMModels(): Promise<AvailableModel[]> {
+function getConfig() {
+  return vscode.workspace.getConfiguration('nspec');
+}
+
+function readStringSetting(key: string, fallback: string): string {
+  return getConfig().get<string>(key, fallback).trim();
+}
+
+function normalizeBaseUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '');
+}
+
+function marker(model: { id: string; vendor: string; family: string; name?: string }): string {
+  return `${model.id} ${model.vendor} ${model.family} ${model.name ?? ''}`.toLowerCase();
+}
+
+function toAvailableModel(model: { id: string; vendor: string; family: string; name?: string }, provider: ProviderKind): AvailableModel {
+  return {
+    id: model.id,
+    vendor: model.vendor,
+    family: model.family,
+    name: model.name ?? `${model.vendor}/${model.family}`,
+    provider,
+  };
+}
+
+function dedupeById(models: vscode.LanguageModelChat[]): vscode.LanguageModelChat[] {
+  const seen = new Set<string>();
+  const deduped: vscode.LanguageModelChat[] = [];
+  for (const model of models) {
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    deduped.push(model);
+  }
+  return deduped;
+}
+
+function getBlockedReasons(model: vscode.LanguageModelChat): string[] {
+  const m = marker(model);
+  const reasons: string[] = [];
+  if (m.includes('copilot')) reasons.push('copilot marker');
+  if (m.includes('github')) reasons.push('github marker');
+  return reasons;
+}
+
+function summarizeModelRows(models: Array<{ id: string; vendor: string; family: string; name?: string }>): string {
+  if (!models.length) return '(none)';
+  return models
+    .map((m) => `${m.id} | ${m.vendor} | ${m.family} | ${m.name ?? ''}`.trim())
+    .slice(0, 12)
+    .join(' ; ');
+}
+
+export function summarizeAvailableModels(models: AvailableModel[]): string {
+  return summarizeModelRows(models);
+}
+
+export function getCodexApiConfig(): CodexApiConfig | null {
+  const settingKey = readStringSetting('apiKey', '');
+  if (settingKey) {
+    return {
+      apiKey: settingKey,
+      baseUrl: normalizeBaseUrl(readStringSetting('apiBaseUrl', 'https://api.openai.com/v1')),
+      model: readStringSetting('apiModel', 'gpt-5.3-codex'),
+      apiKeySource: 'setting',
+    };
+  }
+
+  const envNspec = process.env.NSPEC_API_KEY?.trim();
+  if (envNspec) {
+    return {
+      apiKey: envNspec,
+      baseUrl: normalizeBaseUrl(readStringSetting('apiBaseUrl', 'https://api.openai.com/v1')),
+      model: readStringSetting('apiModel', 'gpt-5.3-codex'),
+      apiKeySource: 'NSPEC_API_KEY',
+    };
+  }
+
+  const envOpenAI = process.env.OPENAI_API_KEY?.trim();
+  if (envOpenAI) {
+    return {
+      apiKey: envOpenAI,
+      baseUrl: normalizeBaseUrl(readStringSetting('apiBaseUrl', 'https://api.openai.com/v1')),
+      model: readStringSetting('apiModel', 'gpt-5.3-codex'),
+      apiKeySource: 'OPENAI_API_KEY',
+    };
+  }
+
+  return null;
+}
+
+export function getCodexApiConfigOrThrow(): CodexApiConfig {
+  const config = getCodexApiConfig();
+  if (config) return config;
+  throw new Error(
+    'Codex API key is not configured. Set nSpec setting `nspec.apiKey` or environment variable `NSPEC_API_KEY`/`OPENAI_API_KEY`.'
+  );
+}
+
+async function selectBySelector(
+  selector: vscode.LanguageModelChatSelector
+): Promise<vscode.LanguageModelChat[]> {
   try {
-    const models = await vscode.lm.selectChatModels();
-    return models.map((m: vscode.LanguageModelChat) => ({
-      id: m.id,
-      vendor: m.vendor,
-      family: m.family,
-      name: m.name ?? `${m.vendor}/${m.family}`,
-      provider: 'vscode-lm' as ProviderKind,
-    }));
+    return await vscode.lm.selectChatModels(selector);
   } catch {
     return [];
   }
 }
 
-async function streamVSCodeLM(
-  modelId: string | null,
-  systemPrompt: string,
-  userPrompt: string,
-  onChunk: StreamChunkCallback,
-  onDone: StreamDoneCallback,
-  onError: StreamErrorCallback,
-  token: vscode.CancellationToken
-): Promise<void> {
+export async function getCodexModelDiagnostics(): Promise<CodexModelDiagnostics> {
+  let allModels: vscode.LanguageModelChat[] = [];
   try {
-    let candidates = modelId
-      ? await vscode.lm.selectChatModels({ id: modelId })
-      : await vscode.lm.selectChatModels();
-
-    if (!candidates || candidates.length === 0) {
-      candidates = await vscode.lm.selectChatModels();
-    }
-    if (!candidates || candidates.length === 0) {
-      throw new Error('No vscode.lm models available');
-    }
-
-    const model = candidates[0];
-    const messages = [
-      vscode.LanguageModelChatMessage.Assistant(systemPrompt),
-      vscode.LanguageModelChatMessage.User(userPrompt),
-    ];
-    const response = await model.sendRequest(messages, {}, token);
-    for await (const chunk of response.text) {
-      if (token.isCancellationRequested) break;
-      onChunk(chunk);
-    }
-    if (token.isCancellationRequested) {
-      onError('Generation cancelled.');
-    } else {
-      onDone();
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    onError(token.isCancellationRequested ? 'Generation cancelled.' : msg);
+    allModels = await vscode.lm.selectChatModels();
+  } catch {
+    allModels = [];
   }
-}
 
-// ── Direct API helpers ─────────────────────────────────────────────────────
+  const selectorMatches = dedupeById(
+    (await Promise.all(CODEX_SELECTORS.map((selector) => selectBySelector(selector)))).flat()
+  );
+  const markerMatches = dedupeById(allModels.filter((model) => marker(model).includes('codex')));
 
-async function streamOpenAICompat(
-  cfg: DirectConfig,
-  systemPrompt: string,
-  userPrompt: string,
-  onChunk: StreamChunkCallback,
-  onDone: StreamDoneCallback,
-  onError: StreamErrorCallback,
-  token: vscode.CancellationToken
-): Promise<void> {
-  try {
-    const body = JSON.stringify({
-      model: cfg.model,
-      stream: true,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-    });
+  const rawCandidates = selectorMatches.length > 0 ? selectorMatches : markerMatches;
+  const blockedMatches = rawCandidates
+    .map((model) => {
+      const reasons = getBlockedReasons(model);
+      return reasons.length ? { model, reasons } : null;
+    })
+    .filter((entry): entry is { model: vscode.LanguageModelChat; reasons: string[] } => entry !== null);
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.apiKey}`,
-    };
+  const codexCandidates = dedupeById(
+    rawCandidates.filter((model) => getBlockedReasons(model).length === 0)
+  );
+  const selectedModel = codexCandidates[0] ?? null;
 
-    const ac = new AbortController();
-    if (token.isCancellationRequested) ac.abort();
-    const cancelSub = token.onCancellationRequested(() => ac.abort());
+  const unavailableReason: CodexModelDiagnostics['unavailableReason'] =
+    selectedModel
+      ? 'none'
+      : allModels.length === 0
+        ? 'noProviders'
+        : allModels.every((m) => getBlockedReasons(m).length > 0)
+          ? 'copilotOnly'
+          : 'noCodex';
 
-    let response: Response;
-    try {
-      response = await fetch(`${cfg.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers,
-        body,
-        signal: ac.signal,
-      });
-    } catch (fetchErr: unknown) {
-      cancelSub.dispose();
-      if (token.isCancellationRequested) {
-        onError('Generation cancelled.');
-        return;
-      }
-      throw fetchErr;
-    }
-
-    if (!response.ok) {
-      cancelSub.dispose();
-      const text = await response.text();
-      throw new Error(`API error ${response.status}: ${text.slice(0, 200)}`);
-    }
-
-    if (!response.body) {
-      cancelSub.dispose();
-      throw new Error('No response body');
-    }
-
-    // Read SSE stream
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      if (token.isCancellationRequested) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        if (data === '[DONE]') {
-          cancelSub.dispose();
-          onDone();
-          return;
-        }
-        try {
-          const parsed = JSON.parse(data);
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (typeof delta === 'string') onChunk(delta);
-        } catch {
-          /* skip malformed lines */
-        }
-      }
-    }
-    cancelSub.dispose();
-    if (token.isCancellationRequested) {
-      onError('Generation cancelled.');
-    } else {
-      onDone();
-    }
-  } catch (err: unknown) {
-    onError(
-      token.isCancellationRequested
-        ? 'Generation cancelled.'
-        : err instanceof Error
-          ? err.message
-          : String(err)
-    );
-  }
-}
-
-async function streamAnthropicDirect(
-  cfg: DirectConfig,
-  systemPrompt: string,
-  userPrompt: string,
-  onChunk: StreamChunkCallback,
-  onDone: StreamDoneCallback,
-  onError: StreamErrorCallback,
-  token: vscode.CancellationToken
-): Promise<void> {
-  try {
-    const body = JSON.stringify({
-      model: cfg.model || 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
-      stream: true,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    });
-
-    const ac = new AbortController();
-    if (token.isCancellationRequested) ac.abort();
-    const cancelSub = token.onCancellationRequested(() => ac.abort());
-
-    let response: Response;
-    try {
-      response = await fetch(`${cfg.baseUrl}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': cfg.apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body,
-        signal: ac.signal,
-      });
-    } catch (fetchErr: unknown) {
-      cancelSub.dispose();
-      if (token.isCancellationRequested) {
-        onError('Generation cancelled.');
-        return;
-      }
-      throw fetchErr;
-    }
-
-    if (!response.ok) {
-      cancelSub.dispose();
-      const text = await response.text();
-      throw new Error(`Anthropic API error ${response.status}: ${text.slice(0, 200)}`);
-    }
-
-    if (!response.body) {
-      cancelSub.dispose();
-      throw new Error('No response body');
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      if (token.isCancellationRequested) break;
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split('\n');
-      buf = lines.pop() ?? '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const data = trimmed.slice(5).trim();
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-            onChunk(parsed.delta.text);
-          }
-          if (parsed.type === 'message_stop') {
-            cancelSub.dispose();
-            onDone();
-            return;
-          }
-        } catch {
-          /* skip */
-        }
-      }
-    }
-    cancelSub.dispose();
-    if (token.isCancellationRequested) {
-      onError('Generation cancelled.');
-    } else {
-      onDone();
-    }
-  } catch (err: unknown) {
-    onError(
-      token.isCancellationRequested
-        ? 'Generation cancelled.'
-        : err instanceof Error
-          ? err.message
-          : String(err)
-    );
-  }
+  return {
+    allModels: allModels.map((m) => toAvailableModel(m, 'vscode-lm')),
+    selectorMatches: selectorMatches.map((m) => toAvailableModel(m, 'vscode-lm')),
+    markerMatches: markerMatches.map((m) => toAvailableModel(m, 'vscode-lm')),
+    blockedMatches: blockedMatches.map((entry) => ({
+      model: toAvailableModel(entry.model, 'vscode-lm'),
+      reasons: entry.reasons,
+    })),
+    codexCandidates: codexCandidates.map((m) => toAvailableModel(m, 'vscode-lm')),
+    selectedModel: selectedModel ? toAvailableModel(selectedModel, 'vscode-lm') : null,
+    unavailableReason,
+  };
 }
 
 // ── Tool-calling types ────────────────────────────────────────────────────
@@ -326,172 +221,127 @@ export interface ProposedChange {
   command?: string;
 }
 
-// ── Public client ──────────────────────────────────────────────────────────
-
-export class LMClient {
-  private selectedModelId: string | null = null;
-  private selectedProvider: ProviderKind = 'vscode-lm';
-
-  async getAvailableModels(): Promise<AvailableModel[]> {
-    const lmModels = await getVSCodeLMModels();
-    const direct = getDirectConfig();
-
-    const directModels: AvailableModel[] = direct
-      ? [
-          {
-            id: direct.model,
-            vendor: direct.provider === 'anthropic' ? 'Anthropic' : 'OpenAI',
-            family: direct.model,
-            name: `${direct.model} (API key)`,
-            provider: direct.provider,
-          },
-        ]
-      : [];
-
-    return [...lmModels, ...directModels];
-  }
-
-  /** Returns true if any model source is available */
-  async hasAnyModel(): Promise<boolean> {
-    const models = await this.getAvailableModels();
-    return models.length > 0;
-  }
-
-  setSelectedModel(modelId: string, provider?: ProviderKind) {
-    this.selectedModelId = modelId;
-    if (provider) this.selectedProvider = provider;
-  }
-
-  getSelectedModelId(): string | null {
-    return this.selectedModelId;
-  }
-
-  async streamCompletion(
-    systemPrompt: string,
-    userPrompt: string,
-    onChunk: StreamChunkCallback,
-    onDone: StreamDoneCallback,
-    onError: StreamErrorCallback,
-    token?: vscode.CancellationToken
-  ): Promise<void> {
-    const cts = token ? null : new vscode.CancellationTokenSource();
-    const cancelToken = token ?? cts!.token;
-
-    try {
-      // If selected model is direct API — skip vscode.lm entirely
-      const direct = getDirectConfig();
-      if (this.selectedProvider !== 'vscode-lm' && direct) {
-        if (direct.provider === 'anthropic') {
-          await streamAnthropicDirect(
-            direct,
-            systemPrompt,
-            userPrompt,
-            onChunk,
-            onDone,
-            onError,
-            cancelToken
-          );
-          return;
-        }
-        await streamOpenAICompat(
-          direct,
-          systemPrompt,
-          userPrompt,
-          onChunk,
-          onDone,
-          onError,
-          cancelToken
-        );
-        return;
-      }
-
-      // Try vscode.lm first
-      const lmModels = await getVSCodeLMModels();
-      if (lmModels.length > 0) {
-        await streamVSCodeLM(
-          this.selectedModelId,
-          systemPrompt,
-          userPrompt,
-          onChunk,
-          onDone,
-          onError,
-          cancelToken
-        );
-        return;
-      }
-
-      // Fallback to direct API
-      if (direct) {
-        if (direct.provider === 'anthropic') {
-          await streamAnthropicDirect(
-            direct,
-            systemPrompt,
-            userPrompt,
-            onChunk,
-            onDone,
-            onError,
-            cancelToken
-          );
-          return;
-        }
-        await streamOpenAICompat(
-          direct,
-          systemPrompt,
-          userPrompt,
-          onChunk,
-          onDone,
-          onError,
-          cancelToken
-        );
-        return;
-      }
-
-      onError(
-        'No AI provider configured. ' +
-          'In VS Code: install GitHub Copilot. ' +
-          'In Cursor: add an API key in nSpec settings (nspec.apiKey).'
-      );
-    } finally {
-      cts?.dispose();
-    }
-  }
-
-  /** Send a request with tool definitions and parse tool call responses into ProposedChanges. */
-  async sendRequestWithTools(
-    systemPrompt: string,
-    userPrompt: string,
-    tools: ToolDefinition[],
-    token?: vscode.CancellationToken
-  ): Promise<ProposedChange[]> {
-    const direct = getDirectConfig();
-    const cts = token ? null : new vscode.CancellationTokenSource();
-    const cancelToken = token ?? cts!.token;
-
-    try {
-      if (
-        (this.selectedProvider !== 'vscode-lm' && direct) ||
-        !(await getVSCodeLMModels()).length
-      ) {
-        if (!direct) throw new Error('No AI provider configured.');
-        return direct.provider === 'anthropic'
-          ? await callAnthropicWithTools(direct, systemPrompt, userPrompt, tools, cancelToken)
-          : await callOpenAIWithTools(direct, systemPrompt, userPrompt, tools, cancelToken);
-      }
-
-      return await callVSCodeLMWithTools(
-        this.selectedModelId,
-        systemPrompt,
-        userPrompt,
-        tools,
-        cancelToken
-      );
-    } finally {
-      cts?.dispose();
-    }
-  }
+interface ChatCompletionChunk {
+  choices?: Array<{ delta?: { content?: string }; message?: { content?: string; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
 }
 
-// ── Tool-calling API helpers ──────────────────────────────────────────────
+function buildCodexApiError(status: number, bodyText: string, model: string): Error {
+  const detail = bodyText.slice(0, 500);
+  const lower = bodyText.toLowerCase();
+  let errorCode = '';
+  let errorMessage = '';
+  try {
+    const parsed = JSON.parse(bodyText) as { error?: { code?: string; message?: string } };
+    errorCode = parsed.error?.code ?? '';
+    errorMessage = parsed.error?.message ?? '';
+  } catch {
+    // keep fallback behavior for non-JSON responses
+  }
+
+  if (status === 404 && (lower.includes('model_not_found') || lower.includes('does not exist'))) {
+    return new Error(
+      `Codex API model '${model}' was not found or not accessible. ` +
+        "Set 'nspec.apiModel' to a current Codex model (for example 'gpt-5.3-codex' or 'gpt-5.1-codex-mini'). " +
+        `Raw error: ${detail}`
+    );
+  }
+
+  if (status === 429 && (errorCode === 'insufficient_quota' || lower.includes('insufficient_quota'))) {
+    return new Error(
+      'Codex API quota exceeded for this API key/project. ' +
+        'Check OpenAI billing, project spend limits, and key/project ownership, then retry. ' +
+        `Model: ${model}. API message: ${errorMessage || detail}`
+    );
+  }
+
+  if (status === 429) {
+    return new Error(
+      'Codex API rate limit reached. Wait and retry, or lower request volume. ' +
+        `Model: ${model}. API message: ${errorMessage || detail}`
+    );
+  }
+
+  return new Error(`Codex API error ${status}: ${detail}`);
+}
+
+async function streamChatCompletions(
+  cfg: CodexApiConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  onChunk: StreamChunkCallback,
+  token: vscode.CancellationToken
+): Promise<void> {
+  const ac = new AbortController();
+  if (token.isCancellationRequested) ac.abort();
+  const cancelSub = token.onCancellationRequested(() => ac.abort());
+
+  try {
+    const response = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: cfg.model,
+        stream: true,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+      signal: ac.signal,
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw buildCodexApiError(response.status, text, cfg.model);
+    }
+
+    if (!response.body) {
+      const json = (await response.json()) as ChatCompletionChunk;
+      const content = json.choices?.[0]?.message?.content;
+      if (content) onChunk(content);
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const events = buffer.split('\n\n');
+      buffer = events.pop() ?? '';
+
+      for (const event of events) {
+        const line = event
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => l.startsWith('data:'));
+        if (!line) continue;
+
+        const payload = line.replace(/^data:\s*/, '');
+        if (!payload || payload === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(payload) as ChatCompletionChunk;
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) onChunk(delta);
+        } catch {
+          // ignore non-json heartbeat chunks
+        }
+      }
+
+      if (token.isCancellationRequested) break;
+    }
+  } finally {
+    cancelSub.dispose();
+  }
+}
 
 function toolCallsToChanges(toolCalls: ToolCall[]): ProposedChange[] {
   return toolCalls.map((tc) => {
@@ -521,8 +371,8 @@ function toolCallsToChanges(toolCalls: ToolCall[]): ProposedChange[] {
   });
 }
 
-async function callOpenAIWithTools(
-  cfg: DirectConfig,
+async function callCodexWithTools(
+  cfg: CodexApiConfig,
   systemPrompt: string,
   userPrompt: string,
   tools: ToolDefinition[],
@@ -531,10 +381,14 @@ async function callOpenAIWithTools(
   const ac = new AbortController();
   if (token.isCancellationRequested) ac.abort();
   const cancelSub = token.onCancellationRequested(() => ac.abort());
+
   try {
-    const res = await fetch(`${cfg.baseUrl}/chat/completions`, {
+    const response = await fetch(`${cfg.baseUrl}/chat/completions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
       body: JSON.stringify({
         model: cfg.model,
         messages: [
@@ -543,114 +397,108 @@ async function callOpenAIWithTools(
         ],
         tools: tools.map((t) => ({
           type: 'function',
-          function: { name: t.name, description: t.description, parameters: t.parameters },
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.parameters,
+          },
         })),
         tool_choice: 'auto',
       }),
       signal: ac.signal,
     });
-    if (!res.ok) throw new Error(`API error ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const json = (await res.json()) as {
-      choices?: {
-        message?: { tool_calls?: { function: { name: string; arguments: string } }[] };
-      }[];
-    };
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw buildCodexApiError(response.status, text, cfg.model);
+    }
+
+    const json = (await response.json()) as ChatCompletionChunk;
     const rawCalls = json.choices?.[0]?.message?.tool_calls ?? [];
-    const toolCalls: ToolCall[] = rawCalls.map(
-      (tc: { function: { name: string; arguments: string } }) => ({
-        name: tc.function.name,
-        arguments: JSON.parse(tc.function.arguments),
+
+    const calls: ToolCall[] = rawCalls
+      .map((tc) => {
+        const name = tc.function?.name;
+        const args = tc.function?.arguments;
+        if (!name || !args) return null;
+        try {
+          return { name, arguments: JSON.parse(args) as Record<string, string> };
+        } catch {
+          return null;
+        }
       })
-    );
-    return toolCallsToChanges(toolCalls);
+      .filter((x): x is ToolCall => x !== null);
+
+    return toolCallsToChanges(calls);
   } finally {
     cancelSub.dispose();
   }
 }
 
-async function callAnthropicWithTools(
-  cfg: DirectConfig,
-  systemPrompt: string,
-  userPrompt: string,
-  tools: ToolDefinition[],
-  token: vscode.CancellationToken
-): Promise<ProposedChange[]> {
-  const ac = new AbortController();
-  if (token.isCancellationRequested) ac.abort();
-  const cancelSub = token.onCancellationRequested(() => ac.abort());
-  try {
-    const res = await fetch(`${cfg.baseUrl}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': cfg.apiKey,
-        'anthropic-version': '2023-06-01',
+// ── Public client ─────────────────────────────────────────────────────────
+
+export class LMClient {
+  async getAvailableModels(): Promise<AvailableModel[]> {
+    const config = getCodexApiConfig();
+    if (!config) return [];
+    return [
+      {
+        id: config.model,
+        vendor: 'openai',
+        family: 'codex',
+        name: config.model,
+        provider: 'codex-api',
       },
-      body: JSON.stringify({
-        model: cfg.model || 'claude-sonnet-4-20250514',
-        max_tokens: 8192,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }],
-        tools: tools.map((t) => ({
-          name: t.name,
-          description: t.description,
-          input_schema: t.parameters,
-        })),
-      }),
-      signal: ac.signal,
-    });
-    if (!res.ok)
-      throw new Error(`Anthropic API error ${res.status}: ${(await res.text()).slice(0, 300)}`);
-    const json = (await res.json()) as {
-      content?: { type: string; name?: string; input?: Record<string, string> }[];
-    };
-    const toolCalls: ToolCall[] = (json.content ?? [])
-      .filter((b: { type: string }) => b.type === 'tool_use')
-      .map((b: { name?: string; input?: Record<string, string> }) => ({
-        name: b.name!,
-        arguments: b.input as Record<string, string>,
-      }));
-    return toolCallsToChanges(toolCalls);
-  } finally {
-    cancelSub.dispose();
+    ];
   }
-}
 
-async function callVSCodeLMWithTools(
-  modelId: string | null,
-  systemPrompt: string,
-  userPrompt: string,
-  tools: ToolDefinition[],
-  token: vscode.CancellationToken
-): Promise<ProposedChange[]> {
-  const toolDefs = tools
-    .map((t) => `- ${t.name}(${t.parameters.required.join(', ')}): ${t.description}`)
-    .join('\n');
-  const augmented = `${systemPrompt}\n\nRespond with a JSON array of tool calls. Each element: {"name":"<tool>","arguments":{<params>}}.\nAvailable tools:\n${toolDefs}\n\nRespond ONLY with the JSON array.`;
-
-  let candidates = modelId
-    ? await vscode.lm.selectChatModels({ id: modelId })
-    : await vscode.lm.selectChatModels();
-  if (!candidates?.length) candidates = await vscode.lm.selectChatModels();
-  if (!candidates?.length) throw new Error('No vscode.lm models available');
-
-  const model = candidates[0];
-  const messages = [
-    vscode.LanguageModelChatMessage.Assistant(augmented),
-    vscode.LanguageModelChatMessage.User(userPrompt),
-  ];
-  const response = await model.sendRequest(messages, {}, token);
-  let accumulated = '';
-  for await (const chunk of response.text) {
-    if (token.isCancellationRequested) break;
-    accumulated += chunk;
+  async hasAnyModel(): Promise<boolean> {
+    return (await this.getAvailableModels()).length > 0;
   }
-  const jsonMatch = accumulated.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return [];
-  try {
-    const parsed = JSON.parse(jsonMatch[0]) as ToolCall[];
-    return toolCallsToChanges(parsed);
-  } catch {
-    return [];
+
+  async streamCompletion(
+    systemPrompt: string,
+    userPrompt: string,
+    onChunk: StreamChunkCallback,
+    onDone: StreamDoneCallback,
+    onError: StreamErrorCallback,
+    token?: vscode.CancellationToken
+  ): Promise<void> {
+    const cts = token ? null : new vscode.CancellationTokenSource();
+    const cancelToken = token ?? cts!.token;
+
+    try {
+      const cfg = getCodexApiConfigOrThrow();
+      await streamChatCompletions(cfg, systemPrompt, userPrompt, onChunk, cancelToken);
+
+      if (cancelToken.isCancellationRequested) {
+        onError('Generation cancelled.');
+        return;
+      }
+
+      onDone();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onError(cancelToken.isCancellationRequested ? 'Generation cancelled.' : msg);
+    } finally {
+      cts?.dispose();
+    }
+  }
+
+  async sendRequestWithTools(
+    systemPrompt: string,
+    userPrompt: string,
+    tools: ToolDefinition[],
+    token?: vscode.CancellationToken
+  ): Promise<ProposedChange[]> {
+    const cts = token ? null : new vscode.CancellationTokenSource();
+    const cancelToken = token ?? cts!.token;
+
+    try {
+      const cfg = getCodexApiConfigOrThrow();
+      return await callCodexWithTools(cfg, systemPrompt, userPrompt, tools, cancelToken);
+    } finally {
+      cts?.dispose();
+    }
   }
 }

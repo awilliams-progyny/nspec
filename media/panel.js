@@ -67,8 +67,6 @@ window.addEventListener('message', e => {
     case 'taskOutput':   break; // Output goes to VS Code output channel
     case 'saved':        showToast('Saved ✓'); break;
     case 'error':        showError(msg.message); break;
-    case 'modelChanged': handleModelChanged(msg); break;
-    case 'modelsLoaded': handleModelsLoaded(msg); break;
     case 'progressUpdated': handleProgressUpdated(msg.progress); break;
     case 'usingCustomPrompt': showToast(`Using custom prompt for ${msg.stage}`); break;
     case 'promptsScaffolded': state.hasCustomPrompts = true; updateBreadcrumb(); break;
@@ -101,10 +99,6 @@ function handleInit(msg) {
     showWelcome();
   }
 }
-
-function handleModelChanged(_msg) {}
-
-function handleModelsLoaded(_msg) {}
 
 // ── Spec events ─────────────────────────────────────────────────────────────
 function handleSpecCreated(msg) {
@@ -777,6 +771,55 @@ function showError(msg) {
 
 function esc(s) { return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
+// ── Sidebar settings menu ────────────────────────────────────────────────────
+function closeSidebarSettingsMenu() {
+  const menu = document.getElementById('sidebar-settings-menu');
+  const button = document.getElementById('btn-sidebar-settings');
+  if (!menu || !button) return;
+  menu.classList.add('hidden');
+  button.setAttribute('aria-expanded', 'false');
+}
+
+function toggleSidebarSettingsMenu() {
+  const menu = document.getElementById('sidebar-settings-menu');
+  const button = document.getElementById('btn-sidebar-settings');
+  if (!menu || !button) return;
+  const willOpen = menu.classList.contains('hidden');
+  if (willOpen) {
+    menu.classList.remove('hidden');
+    button.setAttribute('aria-expanded', 'true');
+  } else {
+    closeSidebarSettingsMenu();
+  }
+}
+
+document.getElementById('btn-sidebar-settings')?.addEventListener('click', e => {
+  e.preventDefault();
+  e.stopPropagation();
+  toggleSidebarSettingsMenu();
+});
+
+document.getElementById('btn-sidebar-validate')?.addEventListener('click', e => {
+  e.preventDefault();
+  closeSidebarSettingsMenu();
+  vscode.postMessage({ command: 'validateSetup' });
+});
+
+document.getElementById('btn-sidebar-open-settings')?.addEventListener('click', e => {
+  e.preventDefault();
+  closeSidebarSettingsMenu();
+  vscode.postMessage({ command: 'openSettings' });
+});
+
+document.addEventListener('click', e => {
+  const menu = document.getElementById('sidebar-settings-menu');
+  const button = document.getElementById('btn-sidebar-settings');
+  if (!menu || !button || menu.classList.contains('hidden')) return;
+  const target = e.target;
+  if (menu.contains(target) || button.contains(target)) return;
+  closeSidebarSettingsMenu();
+});
+
 // ── Edit mode (Deliverable A) ─────────────────────────────────────────────────
 function toggleEditMode() {
   if (state.editMode) exitEditMode();
@@ -939,6 +982,11 @@ document.addEventListener('keydown', e => {
   }
   // Escape close modal / exit edit mode / close refine
   if (e.key === 'Escape') {
+    const settingsMenu = document.getElementById('sidebar-settings-menu');
+    if (settingsMenu && !settingsMenu.classList.contains('hidden')) {
+      closeSidebarSettingsMenu();
+      return;
+    }
     if (state.editMode) { exitEditMode(); return; }
     const refineBar = document.getElementById('refine-inline');
     if (refineBar?.classList.contains('visible')) { closeRefineInline(); return; }

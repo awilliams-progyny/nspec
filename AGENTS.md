@@ -299,3 +299,32 @@ Shell commands proposed by `runCommand` require explicit approval via dialog. Co
 ```json
 "nspec.allowedCommands": ["npm install", "npm run", "npx"]
 ```
+
+## Delegate Handshake (codex_delegate)
+
+When `nspec.provider` is set to `codex_delegate`, treat request/receipt files as the contract.
+
+1. Find the newest request file in `.specs/<spec-name>/.nspec/inbox/*.request.json`.
+2. Read and follow the request fields exactly:
+   - `inputs.system_prompt`
+   - `inputs.user_prompt`
+   - `inputs.source_files`
+   - `outputs.target_files`
+3. Write the requested markdown output file(s) in `outputs.target_files`.
+4. Always write a receipt JSON to `outputs.receipt_path`.
+
+Receipt format:
+
+```json
+{
+  "step_id": "<from request>",
+  "status": "ok | error | needs_input",
+  "outputs_written": ["relative/path.md"],
+  "message": "short result or one blocking question"
+}
+```
+
+Rules:
+- Files are the source of truth; do not stop at chat-only responses.
+- Only write files listed by the request unless absolutely required.
+- If blocked, write `status: "needs_input"` with one clear question in `message`.

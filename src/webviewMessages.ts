@@ -9,7 +9,6 @@
  */
 
 import type { Stage, TaskProgress } from './core/specStore';
-import type { AvailableModel } from './lmClient';
 
 // ── Shared payload shapes ──────────────────────────────────────────────────────
 
@@ -45,15 +44,13 @@ export type ToExtensionMessage =
   | { command: 'runAllTasks' }
   | { command: 'openInEditor'; stage: Stage }
   | { command: 'deleteSpec'; specName: string }
-  | { command: 'selectModel'; modelId: string }
-  | { command: 'pickModelFromPalette' }
   | { command: 'generateVerify' }
   | { command: 'toggleTask'; taskId: string }
   | { command: 'setTaskState'; taskId: string; state: 'checked' | 'empty' }
   | { command: 'setAllTasksState'; state: 'checked' | 'empty' }
   | { command: 'scaffoldPrompts' }
   | { command: 'cancelGeneration' }
-  | { command: 'getModels' }
+  | { command: 'validateSetup' }
   | { command: 'openSettings' }
   | { command: 'renameSpec'; oldName: string; newName: string }
   | { command: 'cascadeFromStage'; fromStage: string }
@@ -87,8 +84,6 @@ export type FromExtensionMessage =
   | {
       type: 'init';
       specs: SpecSummary[];
-      models: AvailableModel[];
-      selectedModelId: string | null;
       activeSpec: string | null;
       activeStage: Stage;
       contents: Partial<Record<Stage, string>>;
@@ -140,8 +135,6 @@ export type FromExtensionMessage =
       completedCount: number;
       totalCount: number;
     }
-  | { type: 'modelsLoaded'; models: AvailableModel[]; selectedModelId: string | null }
-  | { type: 'modelChanged'; modelName: string; modelId: string }
   | { type: 'requirementsFormatChanged'; format: string }
   | { type: 'chatEntry'; role: 'user' | 'assistant'; text: string; stage: Stage }
   | { type: 'inquiryDone'; stage: Stage; answer: string }

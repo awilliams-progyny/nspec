@@ -3,10 +3,28 @@ import { SpecPanelProvider } from './SpecPanelProvider';
 import { loadHooks, scaffoldExamples } from './core/specStore';
 import { runMatchingHooks, HookTrigger } from './core/hooks';
 import { getSpecsRoot, getWorkspaceRoot } from './workspace';
+import {
+  getCodexApiConfig,
+  getCodexApiConfigOrThrow,
+  getCodexModelDiagnostics,
+  summarizeAvailableModels,
+  type CodexModelDiagnostics,
+} from './lmClient';
 
 let provider: SpecPanelProvider | undefined;
 let hooksOutputChannel: vscode.OutputChannel | undefined;
 let activationOutputChannel: vscode.OutputChannel | undefined;
+type NspecProviderMode = 'codex_api' | 'codex_delegate';
+
+function isCodexCommand(commandId: string): boolean {
+  const id = commandId.toLowerCase();
+  return id.startsWith('codex.') || id.startsWith('chatgpt.');
+}
+
+function getProviderMode(): NspecProviderMode {
+  const mode = vscode.workspace.getConfiguration('nspec').get<string>('provider', 'codex_delegate');
+  return mode === 'codex_api' ? 'codex_api' : 'codex_delegate';
+}
 
 function logActivation(message: string, err?: unknown) {
   const ts = new Date().toISOString();
@@ -57,13 +75,6 @@ export function activate(context: vscode.ExtensionContext) {
       });
     }),
 
-    vscode.commands.registerCommand('nspec.pickModel', () => {
-      void runCommand('Select model', async () => {
-        provider!.show();
-        await provider!.pickModel();
-      });
-    }),
-
     vscode.commands.registerCommand('nspec.setupSteering', () => {
       void runCommand('Setup steering', async () => {
         provider!.setupSteering();
@@ -95,8 +106,18 @@ export function activate(context: vscode.ExtensionContext) {
       void runCommand('Validate setup', async () => {
         await validateSetup();
       });
+    }),
+
+    vscode.commands.registerCommand('nspec.diagnoseCodex', () => {
+      void runCommand('Diagnose Codex models', async () => {
+        await diagnoseCodexModels();
+      });
     })
   );
+
+  void ensureCodexAvailableAtStartup().catch((err) => {
+    logActivation('Startup Codex availability check failed', err);
+  });
 
   try {
     setupFileWatcher(context);
@@ -125,60 +146,222 @@ export function activate(context: vscode.ExtensionContext) {
   logActivation('Activation complete');
 }
 
+function formatModelLine(model: { id: string; vendor: string; family: string; name: string }): string {
+  return `${model.id} | ${model.vendor} | ${model.family} | ${model.name}`;
+}
+
+function codexModelFailureMessage(reason: CodexModelDiagnostics['unavailableReason']): string {
+  if (reason === 'none') return 'Codex-compatible LM detected.';
+  if (reason === 'noProviders') return 'No VS Code LM providers detected.';
+  if (reason === 'copilotOnly') return 'Only Copilot/GitHub models are exposed via vscode.lm.';
+  return 'VS Code LM has providers, but none look Codex-compatible.';
+}
+
+async function ensureCodexAvailableAtStartup() {
+  try {
+    const mode = getProviderMode();
+    if (mode === 'codex_api') {
+      const cfg = getCodexApiConfigOrThrow();
+      logActivation(
+        `Startup Codex API check passed: model=${cfg.model}, baseUrl=${cfg.baseUrl}, keySource=${cfg.apiKeySource}`
+      );
+      return;
+    }
+
+    const commands = await vscode.commands.getCommands(true);
+    const codexCommands = commands.filter(isCodexCommand);
+    if (codexCommands.length === 0) {
+      throw new Error(
+        'No Codex/ChatGPT commands detected for delegate mode. Install/enable OpenAI extension and reload VS Code.'
+      );
+    }
+    logActivation(
+      `Startup Codex delegate check passed: commands=${codexCommands.slice(0, 8).join(', ')}`
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logActivation('Startup Codex provider check failed', err);
+    void vscode.window.showErrorMessage(`nSpec: ${message}`);
+  }
+}
+
+async function diagnoseCodexModels() {
+  const mode = getProviderMode();
+  const apiConfig = getCodexApiConfig();
+  const codexExtension = vscode.extensions.getExtension('openai.chatgpt');
+  const allCommands = await vscode.commands.getCommands(true);
+  const codexCommands = allCommands.filter(isCodexCommand).sort();
+  const diagnostics = await getCodexModelDiagnostics();
+  const report: string[] = [];
+  report.push('nSpec Codex Diagnostics');
+  report.push('----------------------');
+  report.push(`Provider mode: ${mode}`);
+  report.push(`Codex API configured: ${apiConfig ? 'yes' : 'no'}`);
+  if (apiConfig) {
+    report.push(`Codex API model: ${apiConfig.model}`);
+    report.push(`Codex API base URL: ${apiConfig.baseUrl}`);
+    report.push(`Codex API key source: ${apiConfig.apiKeySource}`);
+  } else {
+    report.push('Codex API key source: (none)');
+  }
+  report.push(`Codex extension installed: ${codexExtension ? 'yes' : 'no'}`);
+  report.push(`Codex/ChatGPT commands detected: ${codexCommands.length}`);
+  if (codexCommands.length > 0) {
+    report.push(`Command sample: ${codexCommands.slice(0, 8).join(', ')}`);
+  }
+  report.push(`Detected models: ${diagnostics.allModels.length}`);
+  report.push(`Selector matches: ${diagnostics.selectorMatches.length}`);
+  report.push(`Marker matches: ${diagnostics.markerMatches.length}`);
+  report.push(`Blocked matches: ${diagnostics.blockedMatches.length}`);
+  report.push(`Codex candidates: ${diagnostics.codexCandidates.length}`);
+  report.push(`Unavailable reason: ${diagnostics.unavailableReason}`);
+  report.push('');
+  report.push('All models:');
+  report.push('  ' + summarizeAvailableModels(diagnostics.allModels));
+  report.push('Selector matches:');
+  report.push('  ' + summarizeAvailableModels(diagnostics.selectorMatches));
+  report.push('Marker matches:');
+  report.push('  ' + summarizeAvailableModels(diagnostics.markerMatches));
+  if (diagnostics.blockedMatches.length > 0) {
+    report.push('Blocked models:');
+    report.push(
+      '  ' +
+        diagnostics.blockedMatches
+          .map((entry) => `${formatModelLine(entry.model)} [${entry.reasons.join(', ')}]`)
+          .join(' ; ')
+    );
+  }
+  report.push('Selected model:');
+  report.push(
+    '  ' + (diagnostics.selectedModel ? formatModelLine(diagnostics.selectedModel) : '(none)')
+  );
+
+  for (const line of report) {
+    activationOutputChannel?.appendLine(line);
+  }
+  activationOutputChannel?.show(true);
+
+  if (mode === 'codex_delegate') {
+    if (codexCommands.length > 0) {
+      await vscode.window.showInformationMessage(
+        'nSpec: Delegate mode is ready (Codex/ChatGPT commands detected). See Output -> nSpec for diagnostics.'
+      );
+      return;
+    }
+    await vscode.window.showErrorMessage(
+      'nSpec: Delegate mode is selected, but no Codex/ChatGPT commands were detected. Install/enable the OpenAI extension and reload window.'
+    );
+    return;
+  }
+
+  if (apiConfig) {
+    await vscode.window.showInformationMessage(
+      'nSpec: Codex API mode is configured. See Output -> nSpec for diagnostics.'
+    );
+    return;
+  }
+
+  await vscode.window.showErrorMessage(
+    'nSpec: Codex API mode is selected, but API key is not configured. Set `nspec.apiKey` or `NSPEC_API_KEY`/`OPENAI_API_KEY`.'
+  );
+}
+
 async function validateSetup() {
-  const cfg = vscode.workspace.getConfiguration('nspec');
+  const providerMode = getProviderMode();
   const workspaceCount = vscode.workspace.workspaceFolders?.length ?? 0;
   const specsRoot = getSpecsRoot();
-  const apiKey = cfg.get<string>('apiKey', '').trim();
+  const apiConfig = getCodexApiConfig();
   const allCommands = new Set(await vscode.commands.getCommands(true));
+  const codexExtension = vscode.extensions.getExtension('openai.chatgpt');
+
+  let diagnostics: CodexModelDiagnostics | null = null;
+  let lmLookupError = '';
+  try {
+    diagnostics = await getCodexModelDiagnostics();
+  } catch (err) {
+    lmLookupError = err instanceof Error ? err.message : String(err);
+  }
 
   const expectedNspecCommands = [
     'nspec.open',
     'nspec.newSpec',
-    'nspec.pickModel',
     'nspec.setupSteering',
     'nspec.vibeToSpec',
     'nspec.scaffoldPrompts',
     'nspec.checkTasks',
     'nspec.validateSetup',
+    'nspec.diagnoseCodex',
   ];
 
   const missingNspecCommands = expectedNspecCommands.filter((cmd) => !allCommands.has(cmd));
-  const codexCommands = Array.from(allCommands)
-    .filter((cmd) => cmd.toLowerCase().startsWith('codex.'))
-    .sort();
+  const codexCommands = Array.from(allCommands).filter(isCodexCommand).sort();
+  const codexApiReady = apiConfig !== null;
 
   const report: string[] = [];
   report.push('nSpec Setup Validation');
   report.push('----------------------');
+  report.push(`Provider mode: ${providerMode}`);
   report.push(`Workspace folders: ${workspaceCount > 0 ? workspaceCount : 'none'}`);
   report.push(`Specs folder: ${specsRoot ?? '(no workspace open)'}`);
-  report.push(`API key configured: ${apiKey ? 'yes' : 'no'}`);
+  report.push(`Codex API configured: ${codexApiReady ? 'yes' : 'no'}`);
+  if (apiConfig) {
+    report.push(`Codex API model: ${apiConfig.model}`);
+    report.push(`Codex API base URL: ${apiConfig.baseUrl}`);
+    report.push(`Codex API key source: ${apiConfig.apiKeySource}`);
+  }
+  report.push(`OpenAI Codex extension detected: ${codexExtension ? 'yes' : 'no'}`);
+  report.push(`Codex/ChatGPT commands detected: ${codexCommands.length}`);
+  if (codexCommands.length > 0) {
+    report.push(`Command sample: ${codexCommands.slice(0, 8).join(', ')}`);
+  }
+
+  if (diagnostics) {
+    report.push(`vscode.lm models available: ${diagnostics.allModels.length}`);
+    report.push(`Codex selector matches: ${diagnostics.selectorMatches.length}`);
+    report.push(`Codex marker matches: ${diagnostics.markerMatches.length}`);
+    report.push(`Codex candidates after blocklist: ${diagnostics.codexCandidates.length}`);
+    report.push(`vscode.lm status: ${codexModelFailureMessage(diagnostics.unavailableReason)}`);
+    report.push('Discovered vscode.lm models: ' + summarizeAvailableModels(diagnostics.allModels));
+    if (diagnostics.blockedMatches.length > 0) {
+      const blocked = diagnostics.blockedMatches
+        .map((entry) => `${entry.model.id} [${entry.reasons.join(', ')}]`)
+        .join(' ; ');
+      report.push('Blocked Codex candidates: ' + blocked);
+    }
+    if (diagnostics.selectedModel) {
+      report.push('Selected Codex model: ' + formatModelLine(diagnostics.selectedModel));
+    }
+  }
+
+  if (lmLookupError) {
+    report.push(`vscode.lm lookup error: ${lmLookupError.slice(0, 240)}`);
+  }
+
   report.push(
     `nSpec commands registered: ${expectedNspecCommands.length - missingNspecCommands.length}/${expectedNspecCommands.length}`
   );
-  report.push(`Codex commands detected: ${codexCommands.length}`);
-  if (codexCommands.length > 0) {
-    report.push('Codex command sample: ' + codexCommands.slice(0, 8).join(', '));
-  }
   if (missingNspecCommands.length > 0) {
     report.push('Missing nSpec commands: ' + missingNspecCommands.join(', '));
   }
 
   const errors: string[] = [];
   const warnings: string[] = [];
-  if (workspaceCount === 0) {
-    warnings.push('No workspace folder is open.');
+  if (workspaceCount === 0) warnings.push('No workspace folder is open.');
+  if (missingNspecCommands.length > 0) errors.push('Some nSpec commands were not registered.');
+  if (providerMode === 'codex_api' && !codexApiReady) {
+    errors.push(
+      'Codex API key is not configured. Set nSpec setting `nspec.apiKey` or environment variable `NSPEC_API_KEY`/`OPENAI_API_KEY`.'
+    );
   }
-  if (missingNspecCommands.length > 0) {
-    errors.push('Some nSpec commands were not registered.');
+  if (providerMode === 'codex_delegate' && codexCommands.length === 0) {
+    errors.push(
+      'Delegate mode requires Codex/ChatGPT commands (`codex.*` or `chatgpt.*`), but none were found.'
+    );
   }
-  if (codexCommands.length === 0) {
-    warnings.push('No Codex commands detected. Run checked will not start Codex.');
+  if (!codexExtension && !codexApiReady) {
+    warnings.push('OpenAI Codex extension is not installed or enabled.');
   }
-  if (!apiKey) {
-    warnings.push('No nspec.apiKey is configured.');
-  }
+  if (lmLookupError) warnings.push('Could not query VS Code language models.');
 
   report.push('');
   if (errors.length > 0) {
@@ -189,13 +372,7 @@ async function validateSetup() {
     report.push('Warnings:');
     for (const warn of warnings) report.push(`- ${warn}`);
   }
-  if (errors.length === 0 && warnings.length === 0) {
-    report.push('Status: OK');
-  } else if (errors.length === 0) {
-    report.push('Status: WARN');
-  } else {
-    report.push('Status: FAIL');
-  }
+  report.push(errors.length === 0 ? (warnings.length === 0 ? 'Status: OK' : 'Status: WARN') : 'Status: FAIL');
 
   for (const line of report) {
     activationOutputChannel?.appendLine(line);
@@ -211,7 +388,6 @@ async function validateSetup() {
     if (choice === actionLabel) activationOutputChannel?.show(true);
     return;
   }
-
   if (warnings.length > 0) {
     const choice = await vscode.window.showWarningMessage(
       'nSpec: Setup validation completed with warnings. Check Output -> nSpec.',
@@ -220,7 +396,6 @@ async function validateSetup() {
     if (choice === actionLabel) activationOutputChannel?.show(true);
     return;
   }
-
   const choice = await vscode.window.showInformationMessage(
     'nSpec: Setup validation passed.',
     actionLabel

@@ -1,8 +1,8 @@
 {
   "name": "nSpec",
   "displayName": "nSpec",
-  "description": "Generate and maintain structured specs (Requirements → Design → Tasks → Verify) with AI. Use GitHub Copilot or Cursor, custom prompts, hooks, and verification for spec-driven development.",
-  "version": "0.2.1",
+  "description": "Generate and maintain structured specs (Requirements → Design → Tasks → Verify) with Codex, custom prompts, hooks, and verification for spec-driven development.",
+  "version": "0.2.3",
   "publisher": "awilliams",
   "engines": {
     "vscode": "^1.93.0"
@@ -18,8 +18,7 @@
     "tasks",
     "verify",
     "AI",
-    "Copilot",
-    "Cursor",
+    "Codex",
     "spec-driven",
     "OpenSpec"
   ],
@@ -35,12 +34,12 @@
   "activationEvents": [
     "onCommand:nspec.open",
     "onCommand:nspec.newSpec",
-    "onCommand:nspec.pickModel",
     "onCommand:nspec.setupSteering",
     "onCommand:nspec.vibeToSpec",
     "onCommand:nspec.scaffoldPrompts",
     "onCommand:nspec.checkTasks",
     "onCommand:nspec.validateSetup",
+    "onCommand:nspec.diagnoseCodex",
     "onView:nspec.welcomeView"
   ],
   "main": "./out/extension.js",
@@ -54,10 +53,6 @@
       {
         "command": "nspec.newSpec",
         "title": "nSpec: New Spec"
-      },
-      {
-        "command": "nspec.pickModel",
-        "title": "nSpec: Select AI Model"
       },
       {
         "command": "nspec.setupSteering",
@@ -78,6 +73,10 @@
       {
         "command": "nspec.validateSetup",
         "title": "nSpec: Validate Setup"
+      },
+      {
+        "command": "nspec.diagnoseCodex",
+        "title": "nSpec: Diagnose Codex Models"
       }
     ],
     "viewsContainers": {
@@ -100,7 +99,7 @@
     "viewsWelcome": [
       {
         "view": "nspec.welcomeView",
-        "contents": "Create and manage structured specs — Requirements → Design → Tasks → Verify.\n[Open nSpec Panel](command:nspec.open)\n[New Spec](command:nspec.newSpec)\n[Validate Setup](command:nspec.validateSetup)"
+        "contents": "Create and manage structured specs — Requirements → Design → Tasks → Verify.\n[Open nSpec Panel](command:nspec.open)\n[New Spec](command:nspec.newSpec)\n[Validate Setup](command:nspec.validateSetup)\n[Diagnose Codex Models](command:nspec.diagnoseCodex)"
       }
     ],
     "menus": {
@@ -118,9 +117,6 @@
           "command": "nspec.newSpec"
         },
         {
-          "command": "nspec.pickModel"
-        },
-        {
           "command": "nspec.setupSteering"
         },
         {
@@ -134,36 +130,43 @@
         },
         {
           "command": "nspec.validateSetup"
+        },
+        {
+          "command": "nspec.diagnoseCodex"
         }
       ]
     },
     "configuration": {
       "title": "nSpec",
       "properties": {
-        "nspec.preferredModelId": {
+        "nspec.provider": {
+          "type": "string",
+          "enum": [
+            "codex_delegate",
+            "codex_api"
+          ],
+          "default": "codex_delegate",
+          "description": "Generation provider mode. codex_delegate uses Codex/ChatGPT command delegation with file handshake. codex_api uses direct OpenAI API."
+        },
+        "nspec.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Preferred language model ID. Run 'nSpec: Select AI Model' to set interactively."
+          "description": "Codex API key used by nSpec generation. Prefer setting this in User Settings, or use NSPEC_API_KEY / OPENAI_API_KEY environment variables."
+        },
+        "nspec.apiBaseUrl": {
+          "type": "string",
+          "default": "https://api.openai.com/v1",
+          "description": "Base URL for Codex API requests."
+        },
+        "nspec.apiModel": {
+          "type": "string",
+          "default": "gpt-5.3-codex",
+          "description": "Codex model used by nSpec generation."
         },
         "nspec.specsFolder": {
           "type": "string",
           "default": ".specs",
           "description": "Folder path (relative to workspace root) where specs are stored"
-        },
-        "nspec.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "API key for OpenAI or Anthropic (required in Cursor). Leave blank to use vscode.lm (VS Code + Copilot)."
-        },
-        "nspec.apiBaseUrl": {
-          "type": "string",
-          "default": "https://api.openai.com/v1",
-          "description": "API base URL. For Anthropic: https://api.anthropic.com/v1"
-        },
-        "nspec.apiModel": {
-          "type": "string",
-          "default": "gpt-4o",
-          "description": "Model name, for example: gpt-4o"
         },
         "nspec.allowedCommands": {
           "type": "array",

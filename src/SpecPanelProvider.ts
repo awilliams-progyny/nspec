@@ -4,7 +4,7 @@ import * as path from 'path';
 import { LMClient } from './lmClient';
 import * as specManager from './specManager';
 import type { ToExtensionMessage, FromExtensionMessage } from './webviewMessages';
-import { getWorkspaceRoot } from './workspace';
+import { getSpecsRoot, getWorkspaceRoot } from './workspace';
 import { TaskRunner } from './taskRunner';
 import {
   REFINE_SYSTEM,
@@ -33,6 +33,39 @@ interface PanelState {
   chatHistory: Partial<Record<Stage, ChatEntry[]>>;
 }
 
+type ProviderMode = 'codex_api' | 'codex_delegate';
+
+interface DelegateRequest {
+  step_id: string;
+  kind: 'generate' | 'refine' | 'transform';
+  created_at: string;
+  spec_name: string;
+  stage: Stage;
+  goal: string;
+  inputs: {
+    system_prompt: string;
+    user_prompt: string;
+    source_files: string[];
+  };
+  outputs: {
+    target_files: string[];
+    receipt_path: string;
+  };
+  rules: string[];
+}
+
+interface DelegateReceipt {
+  step_id: string;
+  status: 'ok' | 'error' | 'needs_input';
+  outputs_written?: string[];
+  message?: string;
+}
+
+function isCodexCommand(commandId: string): boolean {
+  const id = commandId.toLowerCase();
+  return id.startsWith('codex.') || id.startsWith('chatgpt.');
+}
+
 export class SpecPanelProvider {
   private panel: vscode.WebviewPanel | null = null;
   private context: vscode.ExtensionContext;
@@ -52,11 +85,182 @@ export class SpecPanelProvider {
     this.context = context;
     this.ai = new LMClient();
 
-    // Restore saved model preference
-    const savedModel = vscode.workspace.getConfiguration('nspec').get<string>('preferredModelId');
-    if (savedModel) this.ai.setSelectedModel(savedModel);
-
     this.taskRunner = new TaskRunner((text) => this.postMessage({ type: 'taskOutput', text }));
+  }
+
+  private getProviderMode(): ProviderMode {
+    const mode = vscode.workspace.getConfiguration('nspec').get<string>('provider', 'codex_delegate');
+    return mode === 'codex_api' ? 'codex_api' : 'codex_delegate';
+  }
+
+  private isDelegateMode(): boolean {
+    return this.getProviderMode() === 'codex_delegate';
+  }
+
+  private getSpecsFolderName(): string {
+    return vscode.workspace.getConfiguration('nspec').get<string>('specsFolder') || '.specs';
+  }
+
+  private toWorkspaceRelativePath(filePath: string): string {
+    const wsRoot = this.getWorkspaceRoot();
+    if (!wsRoot) return filePath;
+    return path.relative(wsRoot, filePath) || filePath;
+  }
+
+  private collectDelegateSourceFiles(specName: string): string[] {
+    const specsRoot = getSpecsRoot();
+    if (!specsRoot) return [];
+
+    const specRoot = path.join(specsRoot, specName);
+    const candidates = ['requirements.md', 'design.md', 'tasks.md', 'verify.md'].map((name) =>
+      path.join(specRoot, name)
+    );
+
+    return candidates.filter((file) => fs.existsSync(file)).map((file) => this.toWorkspaceRelativePath(file));
+  }
+
+  private async waitForDelegateReceipt(
+    receiptPath: string,
+    expectedStepId: string,
+    token: vscode.CancellationToken,
+    timeoutMs = 20 * 60 * 1000
+  ): Promise<DelegateReceipt> {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (token.isCancellationRequested) throw new Error('Generation cancelled.');
+
+      if (fs.existsSync(receiptPath)) {
+        try {
+          const raw = fs.readFileSync(receiptPath, 'utf-8');
+          const receipt = JSON.parse(raw) as DelegateReceipt;
+          if (receipt.step_id !== expectedStepId) {
+            await new Promise((resolve) => setTimeout(resolve, 700));
+            continue;
+          }
+          return receipt;
+        } catch {
+          // Receipt might still be in-flight; keep waiting.
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+
+    throw new Error(
+      'Timed out waiting for Codex delegate receipt. Open Codex and complete the request file manually, then retry.'
+    );
+  }
+
+  private async runDelegateStageOperation(
+    stage: Stage,
+    kind: DelegateRequest['kind'],
+    goal: string,
+    systemPrompt: string,
+    userPrompt: string,
+    token: vscode.CancellationToken
+  ): Promise<{ status: 'ok'; content: string } | { status: 'needs_input'; message: string }> {
+    const specName = this.state.activeSpec;
+    if (!specName) throw new Error('No active spec selected.');
+
+    const specsRoot = getSpecsRoot();
+    if (!specsRoot) throw new Error('No specs root found. Open a workspace folder first.');
+
+    const specRoot = path.join(specsRoot, specName);
+    const delegateRoot = path.join(specRoot, '.nspec');
+    const inboxDir = path.join(delegateRoot, 'inbox');
+    const outboxDir = path.join(delegateRoot, 'outbox');
+    fs.mkdirSync(inboxDir, { recursive: true });
+    fs.mkdirSync(outboxDir, { recursive: true });
+
+    const stepId = `${Date.now()}-${kind}-${stage}`;
+    const requestPath = path.join(inboxDir, `${stepId}.request.json`);
+    const receiptPath = path.join(outboxDir, `${stepId}.done.json`);
+    const targetFile = path.join(specRoot, `${stage}.md`);
+
+    const relativeRequestPath = this.toWorkspaceRelativePath(requestPath);
+    const relativeReceiptPath = this.toWorkspaceRelativePath(receiptPath);
+    const relativeTargetPath = this.toWorkspaceRelativePath(targetFile);
+
+    const request: DelegateRequest = {
+      step_id: stepId,
+      kind,
+      created_at: new Date().toISOString(),
+      spec_name: specName,
+      stage,
+      goal,
+      inputs: {
+        system_prompt: systemPrompt,
+        user_prompt: userPrompt,
+        source_files: this.collectDelegateSourceFiles(specName),
+      },
+      outputs: {
+        target_files: [relativeTargetPath],
+        receipt_path: relativeReceiptPath,
+      },
+      rules: [
+        'Read the request JSON and follow it exactly.',
+        `Write final markdown content to: ${relativeTargetPath}`,
+        `Always write a done receipt JSON to: ${relativeReceiptPath}`,
+        'Receipt shape: { step_id, status, outputs_written, message }',
+        'Use status "needs_input" with a single concise question when blocked.',
+      ],
+    };
+
+    fs.writeFileSync(requestPath, JSON.stringify(request, null, 2), 'utf-8');
+
+    const delegatePrompt = [
+      `Execute nSpec delegate request from file: ${relativeRequestPath}`,
+      '',
+      'Steps:',
+      '1. Open and read the request JSON file.',
+      '2. Perform the requested update on the target markdown file(s).',
+      '3. Write the required receipt JSON file with status.',
+      '4. Do not stop at chat-only output; file writes are required.',
+      '',
+      `Receipt path: ${relativeReceiptPath}`,
+    ].join('\n');
+
+    const allCommands = new Set(await vscode.commands.getCommands(true));
+    const startResult = await this.startCodexSession(
+      delegatePrompt,
+      this.getSpecsFolderName(),
+      specName,
+      allCommands
+    );
+
+    if (!startResult.started) {
+      const availableHint =
+        startResult.availableCodexCommands.length > 0
+          ? ' Available Codex/ChatGPT commands: ' +
+            startResult.availableCodexCommands.slice(0, 8).join(', ')
+          : '';
+      const reason =
+        startResult.failureReason === 'no_codex_commands'
+          ? 'No Codex/ChatGPT commands available to run delegate mode.'
+          : 'Could not auto-start Codex/ChatGPT delegate command.';
+      throw new Error(reason + availableHint);
+    }
+
+    this.postMessage({
+      type: 'taskOutput',
+      text: `Delegate request queued: ${relativeRequestPath} via ${startResult.commandId}`,
+    });
+
+    const receipt = await this.waitForDelegateReceipt(receiptPath, stepId, token);
+    if (receipt.status === 'needs_input') {
+      return {
+        status: 'needs_input',
+        message: receipt.message || 'Codex requested more input.',
+      };
+    }
+    if (receipt.status === 'error') {
+      throw new Error(receipt.message || 'Codex delegate reported an error.');
+    }
+    if (!fs.existsSync(targetFile)) {
+      throw new Error(`Delegate completed but output file was not written: ${relativeTargetPath}`);
+    }
+
+    return { status: 'ok', content: fs.readFileSync(targetFile, 'utf-8') };
   }
 
   // --- Public API ------------------------------------------------------------
@@ -88,34 +292,6 @@ export class SpecPanelProvider {
   triggerNewSpec() {
     this.show();
     setTimeout(() => this.postMessage({ type: 'triggerNewSpec' }), 400);
-  }
-
-  async pickModel() {
-    const models = await this.ai.getAvailableModels();
-    if (models.length === 0) {
-      vscode.window.showWarningMessage(
-        'nSpec: No AI model found. Add an API key in Settings -> nSpec.'
-      );
-      return;
-    }
-
-    const items: (vscode.QuickPickItem & { id: string })[] = models.map((m) => ({
-      label: m.name,
-      description: `${m.vendor}  -  ${m.id}`,
-      id: m.id,
-    }));
-
-    const picked = (await vscode.window.showQuickPick(items, {
-      title: 'nSpec - Select AI Model',
-      placeHolder: 'Choose the model to use for spec generation',
-    })) as (vscode.QuickPickItem & { id: string }) | undefined;
-
-    if (picked) {
-      this.ai.setSelectedModel(picked.id);
-      await vscode.workspace.getConfiguration('nspec').update('preferredModelId', picked.id, true);
-      vscode.window.showInformationMessage(`nSpec: Using ${picked.label}`);
-      this.postMessage({ type: 'modelChanged', modelName: picked.label, modelId: picked.id });
-    }
   }
 
   setupSteering() {
@@ -352,14 +528,6 @@ export class SpecPanelProvider {
           this.handleDeleteSpec(msg.specName);
           break;
 
-        case 'selectModel':
-          await this.handleSelectModel(msg.modelId);
-          break;
-
-        case 'pickModelFromPalette':
-          await this.pickModel();
-          break;
-
         case 'generateVerify':
           await this.handleGenerateVerify();
           break;
@@ -384,15 +552,9 @@ export class SpecPanelProvider {
           this.state.cancelToken?.cancel();
           break;
 
-        case 'getModels': {
-          const models = await this.ai.getAvailableModels();
-          this.postMessage({
-            type: 'modelsLoaded',
-            models,
-            selectedModelId: this.ai.getSelectedModelId(),
-          });
+        case 'validateSetup':
+          await vscode.commands.executeCommand('nspec.validateSetup');
           break;
-        }
 
         case 'openSettings':
           await vscode.commands.executeCommand('workbench.action.openSettings', 'nspec');
@@ -488,9 +650,6 @@ export class SpecPanelProvider {
       progress: s.progress ?? null,
     }));
 
-    const models = await this.ai.getAvailableModels();
-    const selectedModelId = this.ai.getSelectedModelId();
-
     const requirementsFormat =
       this.state.activeSpec != null
         ? (specManager.readConfig(this.state.activeSpec)?.requirementsFormat ?? undefined)
@@ -499,8 +658,6 @@ export class SpecPanelProvider {
     this.postMessage({
       type: 'init',
       specs,
-      models,
-      selectedModelId,
       activeSpec: this.state.activeSpec,
       activeStage: this.state.activeStage,
       contents: this.state.contents,
@@ -577,6 +734,15 @@ export class SpecPanelProvider {
     _specType: string,
     _template: string
   ) {
+    if (this.isDelegateMode()) {
+      this.postMessage({
+        type: 'clarificationError',
+        message:
+          'Clarification streaming is unavailable in delegate mode. Continue with spec creation and refine after file generation.',
+      });
+      return;
+    }
+
     if (!specName?.trim() || !description?.trim()) {
       this.postMessage({
         type: 'clarificationError',
@@ -745,6 +911,45 @@ export class SpecPanelProvider {
     const cts = new vscode.CancellationTokenSource();
     this.postMessage({ type: 'streamStart', stage });
     try {
+      if (this.isDelegateMode()) {
+        const result = await this.runDelegateStageOperation(
+          stage,
+          'transform',
+          `Transform imported document into ${stage}.md`,
+          systemPrompt,
+          userPrompt,
+          cts.token
+        );
+
+        if (result.status === 'needs_input') {
+          this.postMessage({ type: 'error', message: result.message });
+          return;
+        }
+
+        accumulated = result.content;
+        this.state.contents[stage] = accumulated;
+        if (stage === 'tasks') {
+          const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec!, accumulated);
+          this.postMessage({ type: 'progressUpdated', progress });
+        }
+        const currentSpec = this.state.activeSpec;
+        this.postMessage({ type: 'streamDone', stage, content: accumulated });
+        const requirementsFormat = currentSpec
+          ? (specManager.readConfig(currentSpec)?.requirementsFormat ?? undefined)
+          : undefined;
+        this.postMessage({
+          type: 'specOpened',
+          specName: currentSpec ?? '',
+          activeStage: this.state.activeStage,
+          contents: this.state.contents,
+          progress: currentSpec ? specManager.readTaskProgress(currentSpec) : null,
+          hasCustomPrompts: currentSpec ? specManager.hasCustomPrompts(currentSpec) : false,
+          requirementsFormat,
+        });
+        vscode.window.showInformationMessage(`nSpec: Imported and transformed into ${stage}.md`);
+        return;
+      }
+
       await this.ai.streamCompletion(
         systemPrompt,
         userPrompt,
@@ -932,6 +1137,47 @@ export class SpecPanelProvider {
 
     let accumulated = '';
 
+    if (this.isDelegateMode()) {
+      try {
+        const result = await this.runDelegateStageOperation(
+          stage,
+          'generate',
+          `Generate ${stage}.md for spec ${specName}`,
+          systemPrompt,
+          finalUserContent,
+          cts.token
+        );
+
+        this.state.generating = false;
+        this.state.cancelToken = null;
+
+        if (result.status === 'needs_input') {
+          this.postMessage({ type: 'error', message: result.message });
+          return;
+        }
+
+        accumulated = result.content;
+        this.state.contents[stage] = accumulated;
+        this.state.activeStage = stage;
+
+        if (this.state.activeSpec) {
+          this.lastWriteTs = Date.now();
+          if (stage === 'tasks') {
+            const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, accumulated);
+            this.postMessage({ type: 'progressUpdated', progress });
+          }
+        }
+
+        this.postMessage({ type: 'streamDone', stage, content: accumulated });
+      } catch (err) {
+        this.state.generating = false;
+        this.state.cancelToken = null;
+        const message = err instanceof Error ? err.message : String(err);
+        this.postMessage({ type: 'error', message });
+      }
+      return;
+    }
+
     await this.ai.streamCompletion(
       systemPrompt,
       finalUserContent,
@@ -1011,6 +1257,54 @@ export class SpecPanelProvider {
     this.postMessage({ type: 'streamStart', stage, isRefine: true });
 
     let accumulated = '';
+
+    if (this.isDelegateMode()) {
+      try {
+        const result = await this.runDelegateStageOperation(
+          stage,
+          'refine',
+          `Refine ${stage}.md for spec ${this.state.activeSpec ?? ''}`,
+          REFINE_SYSTEM,
+          userPrompt,
+          cts.token
+        );
+
+        this.state.generating = false;
+        this.state.cancelToken = null;
+
+        if (result.status === 'needs_input') {
+          const answer = result.message;
+          if (this.state.chatHistory[stage]) {
+            this.state.chatHistory[stage]!.push({ role: 'assistant', text: answer });
+          }
+          this.postMessage({ type: 'inquiryDone', stage, answer });
+          return;
+        }
+
+        accumulated = result.content;
+        if (this.state.chatHistory[stage]) {
+          this.state.chatHistory[stage]!.push({
+            role: 'assistant',
+            text: ' Document updated.',
+          });
+        }
+        this.state.contents[stage] = accumulated;
+        if (this.state.activeSpec) {
+          this.lastWriteTs = Date.now();
+          if (stage === 'tasks') {
+            const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, accumulated);
+            this.postMessage({ type: 'progressUpdated', progress });
+          }
+        }
+        this.postMessage({ type: 'streamDone', stage, content: accumulated });
+      } catch (err) {
+        this.state.generating = false;
+        this.state.cancelToken = null;
+        const message = err instanceof Error ? err.message : String(err);
+        this.postMessage({ type: 'error', message });
+      }
+      return;
+    }
 
     await this.ai.streamCompletion(
       REFINE_SYSTEM,
@@ -1120,13 +1414,13 @@ export class SpecPanelProvider {
     if (!startResult.started) {
       const availableHint =
         startResult.availableCodexCommands.length > 0
-          ? ' Available Codex commands: ' +
+          ? ' Available Codex/ChatGPT commands: ' +
             startResult.availableCodexCommands.slice(0, 6).join(', ')
           : '';
       const reason =
         startResult.failureReason === 'no_codex_commands'
-          ? 'No Codex commands are available in this VS Code session. Install/enable the Codex extension, then reload the window.'
-          : 'Found Codex commands, but nSpec could not start a Codex session automatically. Open Codex once and retry.';
+          ? 'No Codex/ChatGPT commands are available in this VS Code session. Install/enable the OpenAI extension, then reload the window.'
+          : 'Found Codex/ChatGPT commands, but nSpec could not start a Codex session automatically. Open Codex once and retry.';
       const message = reason + availableHint;
       this.postMessage({
         type: 'error',
@@ -1189,6 +1483,12 @@ export class SpecPanelProvider {
 
   private getCodexCommandCandidates(allCommands: Set<string>): string[] {
     const preferred = [
+      'chatgpt.newCodexPanel',
+      'chatgpt.newChat',
+      'chatgpt.openSidebar',
+      'chatgpt.openCommandMenu',
+      'chatgpt.addToThread',
+      'chatgpt.addFileToThread',
       'codex.startSession',
       'codex.start',
       'codex.newChat',
@@ -1204,7 +1504,7 @@ export class SpecPanelProvider {
     ];
 
     const availableCodex = Array.from(allCommands)
-      .filter((cmd) => cmd.toLowerCase().startsWith('codex.'))
+      .filter(isCodexCommand)
       .sort();
 
     const heuristic = availableCodex.filter((cmd) =>
@@ -1262,7 +1562,7 @@ export class SpecPanelProvider {
     failureReason: 'none' | 'no_codex_commands' | 'invoke_failed';
   }> {
     const availableCodexCommands = Array.from(allCommands)
-      .filter((cmd) => cmd.toLowerCase().startsWith('codex.'))
+      .filter(isCodexCommand)
       .sort();
 
     const candidates = this.getCodexCommandCandidates(allCommands);
@@ -1305,6 +1605,14 @@ export class SpecPanelProvider {
   }
 
   private async handleRunTaskSupervised(taskLabel: string) {
+    if (this.isDelegateMode()) {
+      this.postMessage({
+        type: 'error',
+        message:
+          'Supervised tool-calling run requires API mode. In delegate mode, use "Run checked" so Codex writes files directly.',
+      });
+      return;
+    }
     if (!this.state.activeSpec) return;
     const req = this.state.contents.requirements || '';
     const des = this.state.contents.design || '';
@@ -1344,6 +1652,14 @@ export class SpecPanelProvider {
   }
 
   private async handleRunAllTasksSupervised() {
+    if (this.isDelegateMode()) {
+      this.postMessage({
+        type: 'error',
+        message:
+          'Run all supervised requires API mode. In delegate mode, use "Run checked" to delegate task execution to Codex.',
+      });
+      return;
+    }
     if (!this.state.activeSpec) return;
     const tasksContent = this.state.contents.tasks;
     if (!tasksContent) {
@@ -1423,14 +1739,6 @@ export class SpecPanelProvider {
 
   private getWorkspaceRoot(): string | null {
     return getWorkspaceRoot();
-  }
-
-  private async handleSelectModel(modelId: string) {
-    this.ai.setSelectedModel(modelId);
-    await vscode.workspace.getConfiguration('nspec').update('preferredModelId', modelId, true);
-    const models = await this.ai.getAvailableModels();
-    const model = models.find((m) => m.id === modelId);
-    this.postMessage({ type: 'modelChanged', modelName: model?.name ?? modelId, modelId });
   }
 
   // --- Delete spec -----------------------------------------------------------

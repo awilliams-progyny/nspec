@@ -1,6 +1,6 @@
 # nSpec
 
-> **Spec-driven development for VS Code and Cursor.**  
+> **Spec-driven development for VS Code + Codex.**  
 > Turn a feature description into a traceable **Requirements → Design → Tasks → Verify** pipeline — then execute tasks with AI-reviewed diffs.
 
 [![Version](https://img.shields.io/badge/version-0.2.0-blue)](https://github.com/nspec/nSpec/releases)
@@ -34,31 +34,23 @@ Each stage feeds the next. If requirements change, cascade regenerates everythin
 
 ## Quick start
 
-> **The only required setting is your API key.**  
-> Set `nspec.apiKey` in VS Code Settings and everything else uses a working default.
+> **Requirement:** Use either `codex_delegate` mode (default) or configure Codex API mode.
 
 ### Prerequisites
 
-- VS Code 1.93+ or Cursor
-- An OpenAI API key (`sk-...`)
+- VS Code 1.93+
+- OpenAI ChatGPT/Codex extension for delegate mode (`openai.chatgpt`), or
+- Codex API key for API mode (`nspec.apiKey` or `NSPEC_API_KEY`/`OPENAI_API_KEY`)
 
-### VS Code + OpenAI (recommended)
-
-1. **Install:** Extensions panel → `⋯` menu → **Install from VSIX** → select `nSpec-*.vsix`
-2. **Add your key:** `Ctrl+,` → search `nspec` → set **API Key** to your OpenAI key
-3. **Open the panel:** `Ctrl+Shift+K` (Windows/Linux) or `Cmd+Shift+K` (Mac)
-4. **Create a spec:** Command Palette → **nSpec: New Spec** → enter a feature description → press Enter
-
-Specs are stored in `.specs/` and the default model is `gpt-4o`. No further configuration needed.
-
-### Cursor
+### VS Code + Codex (recommended)
 
 1. **Install:** Extensions panel → `⋯` menu → **Install from VSIX** → select `nSpec-*.vsix`
-2. **Add your key:** `Ctrl+,` → search `nspec` → set **API Key**
-   - OpenAI: `sk-...` (default model: `gpt-4o`)
-3. **Open the panel:** `Ctrl+Shift+K`
+2. **Choose provider mode:** `nSpec: Provider` (`codex_delegate` by default)
+3. **If using API mode:** set `nSpec: Api Key` (optional: model/base URL)
+4. **Open the panel:** `Ctrl+Shift+K` (Windows/Linux) or `Cmd+Shift+K` (Mac)
+5. **Create a spec:** Command Palette → **nSpec: New Spec** → enter a feature description → press Enter
 
-> **Tip:** Run **nSpec: Select AI Model** from the Command Palette to pick from available models interactively.
+Specs are stored in `.specs/`.
 
 ### Building from source
 
@@ -84,6 +76,7 @@ Install the `.vsix` via **Extensions → ⋯ → Install from VSIX**.
 | Cascade downstream | Press **Cascade** to regenerate all stages below the current one |
 | Run tasks (supervised) | Click **Run all tasks** in the Tasks stage — review each diff before it applies |
 | Check task completion | Command Palette: **nSpec: Check Task Completion** |
+| Diagnose Codex availability | Command Palette: **nSpec: Diagnose Codex Models** (prints API readiness + optional `vscode.lm` visibility diagnostics to Output → nSpec) |
 | Custom prompts | Click the **✦ OpenSpec** badge in the breadcrumb to scaffold `_prompts/` |
 | Setup steering | Command Palette: **nSpec: Setup Steering Files** |
 
@@ -140,7 +133,7 @@ node bin/nspec.mjs import <name> <stage> <file> \
 
 In the Tasks stage, use **Run checked** or **Run all tasks (supervised)** to send task implementation prompts to Codex.
 
-If Codex commands are unavailable in the current VS Code/Cursor session, nSpec now shows a clear error with recovery actions (open extensions or reload window).
+If Codex commands are unavailable in the current VS Code session, nSpec now shows a clear error with recovery actions (open extensions or reload window).
 
 ---
 
@@ -150,11 +143,11 @@ All settings are under **Settings → nSpec** (search `nspec` in the VS Code set
 
 | Setting | Default | Description |
 |---------|---------|-------------|
+| `nspec.provider` | `codex_delegate` | Provider mode: `codex_delegate` (file-handshake via Codex/ChatGPT commands) or `codex_api` (direct API calls) |
+| `nspec.apiKey` | `` | Codex API key used by nSpec generation |
+| `nspec.apiBaseUrl` | `https://api.openai.com/v1` | Codex API base URL |
+| `nspec.apiModel` | `gpt-5.3-codex` | Codex model used by nSpec generation |
 | `nspec.specsFolder` | `.specs` | Folder (relative to workspace root) where specs are stored |
-| `nspec.apiKey` | — | OpenAI API key. Required for VS Code + Codex and CLI usage. |
-| `nspec.apiBaseUrl` | `https://api.openai.com/v1` | API base URL. For local Ollama: `http://localhost:11434/v1`. |
-| `nspec.apiModel` | `gpt-4o` | Model name. Examples: `gpt-4o`, `llama3`. |
-| `nspec.preferredModelId` | — | VS Code model ID. Set via **nSpec: Select AI Model** command. |
 | `nspec.allowedCommands` | `["npm install","npm run","npx"]` | Command prefixes auto-approved during supervised task execution. All others require manual approval. |
 
 ---
@@ -200,8 +193,9 @@ Run **nSpec: Setup Steering Files** to auto-generate `product.md`, `tech.md`, an
 
 | Symptom | Fix |
 |---------|-----|
-| **No models found** | Set `nspec.apiKey` to your OpenAI key in VS Code or Cursor Settings. |
-| **Generation failed** | Check your API key, network connection, and model name. |
+| **Codex not available** | In `codex_delegate` mode, ensure `chatgpt.*`/`codex.*` commands are available and run **nSpec: Diagnose Codex Models**. In `codex_api` mode, set `nspec.apiKey` or env key. |
+| **Generation failed** | Verify key/base URL/model in `nSpec` settings and check Output → nSpec for API error details. |
+| **Run checked says no Codex commands** | Install/enable OpenAI Codex extension (`openai.chatgpt`) for command-based workflows. Generation does not depend on `vscode.lm`. |
 | **CLI: NSPEC_API_KEY is required** | `export NSPEC_API_KEY="sk-..."` in your shell before running CLI commands. |
 | **Panel empty or stale** | Reopen the panel. Make sure a folder is open (File → Open Folder) and `.specs/` exists. |
 | **No workspace folder** | Open a folder (File → Open Folder) before creating specs. |
@@ -213,7 +207,7 @@ Run **nSpec: Setup Steering Files** to auto-generate `product.md`, `tech.md`, an
 
 ## Security
 
-- **Never commit API keys.** Use VS Code Settings (stored in your user profile, not the workspace) or environment variables for CLI usage. See `.env.example`.
+- **Never commit API keys.** Use environment variables for CLI usage. See `.env.example`.
 - The `.gitignore` excludes `.env`, `.env.*`, and `*.local.json` by default.
 - Supervised task execution requires explicit approval for shell commands not in `nspec.allowedCommands`.
 

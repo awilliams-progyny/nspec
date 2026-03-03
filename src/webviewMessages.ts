@@ -50,6 +50,7 @@ export type ToExtensionMessage =
   | { command: 'setAllTasksState'; state: 'checked' | 'empty' }
   | { command: 'scaffoldPrompts' }
   | { command: 'cancelGeneration' }
+  | { command: 'markStageDone' }
   | { command: 'validateSetup' }
   | { command: 'openSettings' }
   | { command: 'renameSpec'; oldName: string; newName: string }
@@ -113,6 +114,8 @@ export type FromExtensionMessage =
   | { type: 'streamStart'; stage: Stage; isRefine?: boolean }
   | { type: 'streamChunk'; stage: Stage; chunk: string }
   | { type: 'streamDone'; stage: Stage; content: string }
+  | { type: 'pendingMetaWarning'; stage: Stage; message: string }
+  | { type: 'pendingMetaWarningCleared' }
   | { type: 'usingCustomPrompt'; stage: Stage }
   | { type: 'error'; message: string }
   | { type: 'saved'; stage: Stage }

@@ -34,19 +34,19 @@ Each stage feeds the next. If requirements change, cascade regenerates everythin
 
 ## Quick start
 
-> **Requirement:** Use either `codex_delegate` mode (default) or configure Codex API mode.
+> **Requirement:** Use either `codex-ui` provider (default) or configure `lm` provider with API key.
 
 ### Prerequisites
 
 - VS Code 1.93+
-- OpenAI ChatGPT/Codex extension for delegate mode (`openai.chatgpt`), or
-- Codex API key for API mode (`nspec.apiKey` or `NSPEC_API_KEY`/`OPENAI_API_KEY`)
+- OpenAI ChatGPT/Codex extension for `codex-ui` provider (`openai.chatgpt`), or
+- Codex API key for `lm` provider (`nspec.apiKey` or `NSPEC_API_KEY`/`OPENAI_API_KEY`)
 
 ### VS Code + Codex (recommended)
 
 1. **Install:** Extensions panel → `⋯` menu → **Install from VSIX** → select `nSpec-*.vsix`
-2. **Choose provider mode:** `nSpec: Provider` (`codex_delegate` by default)
-3. **If using API mode:** set `nSpec: Api Key` (optional: model/base URL)
+2. **Set provider:** `nSpec: Generation Provider` (`codex-ui` by default)
+3. **If using `lm`:** set `nSpec: Api Key` (optional: model/base URL)
 4. **Open the panel:** `Ctrl+Shift+K` (Windows/Linux) or `Cmd+Shift+K` (Mac)
 5. **Create a spec:** Command Palette → **nSpec: New Spec** → enter a feature description → press Enter
 
@@ -135,6 +135,20 @@ In the Tasks stage, use **Run checked** or **Run all tasks (supervised)** to sen
 
 If Codex commands are unavailable in the current VS Code session, nSpec now shows a clear error with recovery actions (open extensions or reload window).
 
+### codex-ui completion contract
+
+In `codex-ui`, nSpec pre-writes the target stage file with an nspec header:
+
+```md
+<!-- nspec:
+stage: requirements
+step_id: requirements-...
+done: false
+-->
+```
+
+Codex must edit that same file in place and set `done: true`. nSpec watches file updates and only completes the stage when `stage`, `step_id`, and `done: true` all match.
+
 ---
 
 ## Configuration reference
@@ -143,8 +157,8 @@ All settings are under **Settings → nSpec** (search `nspec` in the VS Code set
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `nspec.provider` | `codex_delegate` | Provider mode: `codex_delegate` (file-handshake via Codex/ChatGPT commands) or `codex_api` (direct API calls) |
-| `nspec.apiKey` | `` | Codex API key used by nSpec generation |
+| `nspec.generationProvider` | `codex-ui` | Generation provider: `codex-ui` (Codex/ChatGPT edits stage files and flips nspec meta done flag) or `lm` (direct API text generation) |
+| `nspec.apiKey` | `` | Codex API key used when `nspec.generationProvider` is `lm` |
 | `nspec.apiBaseUrl` | `https://api.openai.com/v1` | Codex API base URL |
 | `nspec.apiModel` | `gpt-5.3-codex` | Codex model used by nSpec generation |
 | `nspec.specsFolder` | `.specs` | Folder (relative to workspace root) where specs are stored |
@@ -193,9 +207,10 @@ Run **nSpec: Setup Steering Files** to auto-generate `product.md`, `tech.md`, an
 
 | Symptom | Fix |
 |---------|-----|
-| **Codex not available** | In `codex_delegate` mode, ensure `chatgpt.*`/`codex.*` commands are available and run **nSpec: Diagnose Codex Models**. In `codex_api` mode, set `nspec.apiKey` or env key. |
+| **Codex not available** | In `codex-ui`, ensure `chatgpt.*`/`codex.*` commands are available and run **nSpec: Diagnose Codex Models**. In `lm`, set `nspec.apiKey` or env key. |
 | **Generation failed** | Verify key/base URL/model in `nSpec` settings and check Output → nSpec for API error details. |
 | **Run checked says no Codex commands** | Install/enable OpenAI Codex extension (`openai.chatgpt`) for command-based workflows. Generation does not depend on `vscode.lm`. |
+| **codex-ui waits forever** | Ensure the stage file keeps the nspec header and ends with `done: true`. Use the panel action **Mark stage done** to repair malformed headers. |
 | **CLI: NSPEC_API_KEY is required** | `export NSPEC_API_KEY="sk-..."` in your shell before running CLI commands. |
 | **Panel empty or stale** | Reopen the panel. Make sure a folder is open (File → Open Folder) and `.specs/` exists. |
 | **No workspace folder** | Open a folder (File → Open Folder) before creating specs. |

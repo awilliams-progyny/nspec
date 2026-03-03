@@ -300,31 +300,24 @@ Shell commands proposed by `runCommand` require explicit approval via dialog. Co
 "nspec.allowedCommands": ["npm install", "npm run", "npx"]
 ```
 
-## Delegate Handshake (codex_delegate)
+## codex-ui Stage Contract
 
-When `nspec.provider` is set to `codex_delegate`, treat request/receipt files as the contract.
+When `nspec.generationProvider` is `codex-ui`, stage markdown files are the contract.
 
-1. Find the newest request file in `.specs/<spec-name>/.nspec/inbox/*.request.json`.
-2. Read and follow the request fields exactly:
-   - `inputs.system_prompt`
-   - `inputs.user_prompt`
-   - `inputs.source_files`
-   - `outputs.target_files`
-3. Write the requested markdown output file(s) in `outputs.target_files`.
-4. Always write a receipt JSON to `outputs.receipt_path`.
+Each target stage file starts with an nspec header:
 
-Receipt format:
-
-```json
-{
-  "step_id": "<from request>",
-  "status": "ok | error | needs_input",
-  "outputs_written": ["relative/path.md"],
-  "message": "short result or one blocking question"
-}
+```md
+<!-- nspec:
+stage: requirements|design|tasks|verify
+step_id: <opaque id>
+done: false
+-->
 ```
 
 Rules:
-- Files are the source of truth; do not stop at chat-only responses.
-- Only write files listed by the request unless absolutely required.
-- If blocked, write `status: "needs_input"` with one clear question in `message`.
+1. Edit the target stage file in place.
+2. Keep the header at the top.
+3. Preserve `stage` and `step_id` values exactly.
+4. Set `done: true` when the file is complete.
+5. Write the full markdown body below the header.
+6. Do not rely on chat-only output; file content is the source of truth.

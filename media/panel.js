@@ -10,6 +10,7 @@ let state = {
   hasCustomPrompts: false,
   editMode: false,
   requirementsFormat: 'given-when-then',
+  pendingWarning: null,
 };
 let streamBuffer = { requirements: '', design: '', tasks: '', verify: '' };
 let streamRenderBuffer = { requirements: '', design: '', tasks: '', verify: '' };
@@ -62,6 +63,8 @@ window.addEventListener('message', e => {
     case 'streamStart':  handleStreamStart(msg); break;
     case 'streamChunk':  handleStreamChunk(msg); break;
     case 'streamDone':   handleStreamDone(msg); break;
+    case 'pendingMetaWarning': handlePendingMetaWarning(msg); break;
+    case 'pendingMetaWarningCleared': clearPendingMetaWarning(); break;
     case 'inquiryDone':  handleInquiryDone(msg); break;
     case 'chatEntry':    break; // No longer rendered in panel (use Copilot chat instead)
     case 'taskOutput':   break; // Output goes to VS Code output channel
@@ -86,6 +89,7 @@ function handleInit(msg) {
   state.activeStage = msg.activeStage || 'requirements';
   state.contents = msg.contents || {};
   state.requirementsFormat = msg.requirementsFormat || 'given-when-then';
+  state.pendingWarning = null;
 
   const active = state.specs.find(s => s.name === state.activeSpec);
   state.progress = active?.progress || null;
@@ -98,6 +102,7 @@ function handleInit(msg) {
   } else {
     showWelcome();
   }
+  renderPendingWarning();
 }
 
 // ── Spec events ─────────────────────────────────────────────────────────────
@@ -107,12 +112,14 @@ function handleSpecCreated(msg) {
   state.contents = {};
   state.progress = null;
   state.hasCustomPrompts = msg.hasCustomPrompts || false;
+  state.pendingWarning = null;
   streamBuffer = { requirements: '', design: '', tasks: '', verify: '' };
   addOrUpdateSpecInList({ name: msg.specName, hasRequirements: false, hasDesign: false, hasTasks: false, hasVerify: false, progress: null });
   renderSidebar();
   showMainContent();
   setActiveStage('requirements');
   updateBreadcrumb();
+  renderPendingWarning();
 }
 
 function handleSpecOpened(msg) {
@@ -122,6 +129,7 @@ function handleSpecOpened(msg) {
   state.progress = msg.progress || null;
   state.hasCustomPrompts = msg.hasCustomPrompts || false;
   state.requirementsFormat = msg.requirementsFormat || 'given-when-then';
+  state.pendingWarning = null;
   streamBuffer = { requirements: '', design: '', tasks: '', verify: '' };
   renderAllStages();
   showMainContent();
@@ -129,6 +137,7 @@ function handleSpecOpened(msg) {
   renderSidebar();
   updateBreadcrumb();
   if (state.progress && state.activeStage === 'tasks') renderProgress(state.progress);
+  renderPendingWarning();
 }
 
 function handleProgressUpdated(progress) {
@@ -161,6 +170,7 @@ function handleSpecDeleted(specName) {
 let isRefineStream = false;
 function handleStreamStart(msg) {
   state.generating = true;
+  state.pendingWarning = null;
   isRefineStream = !!msg.isRefine;
   startStageStreamProgress(msg.stage);
   streamBuffer[msg.stage] = '';
@@ -171,6 +181,7 @@ function handleStreamStart(msg) {
   if (el) { el.innerHTML = ''; el.classList.add('stream-cursor'); }
   setActiveStage(msg.stage);
   updateTopbarActions();
+  renderPendingWarning();
 }
 
 function handleStreamChunk(msg) {
@@ -228,6 +239,33 @@ function handleStreamDone(msg) {
   updateSpecStages(state.activeSpec, msg.stage);
   renderSidebar();
   updateTopbarActions();
+  clearPendingMetaWarning();
+}
+
+function handlePendingMetaWarning(msg) {
+  state.pendingWarning = {
+    stage: msg.stage,
+    message: msg.message,
+  };
+  renderPendingWarning();
+}
+
+function clearPendingMetaWarning() {
+  state.pendingWarning = null;
+  renderPendingWarning();
+}
+
+function renderPendingWarning() {
+  const wrap = document.getElementById('pending-warning');
+  const text = document.getElementById('pending-warning-text');
+  if (!wrap || !text) return;
+  if (!state.pendingWarning) {
+    wrap.classList.add('hidden');
+    text.textContent = '';
+    return;
+  }
+  wrap.classList.remove('hidden');
+  text.textContent = state.pendingWarning.message || '';
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -809,6 +847,11 @@ document.getElementById('btn-sidebar-open-settings')?.addEventListener('click', 
   e.preventDefault();
   closeSidebarSettingsMenu();
   vscode.postMessage({ command: 'openSettings' });
+});
+
+document.getElementById('btn-mark-stage-done')?.addEventListener('click', e => {
+  e.preventDefault();
+  vscode.postMessage({ command: 'markStageDone' });
 });
 
 document.addEventListener('click', e => {

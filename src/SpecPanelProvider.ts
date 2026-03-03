@@ -5,6 +5,8 @@ import { LMClient } from './lmClient';
 import * as specManager from './specManager';
 import type { ToExtensionMessage, FromExtensionMessage } from './webviewMessages';
 import { getSpecsRoot, getWorkspaceRoot } from './workspace';
+import { startCodexSession } from './codexBridge';
+import { isDone, makeStepId, parseNspecMeta, upsertNspecMeta } from './core/nspecMeta';
 import { TaskRunner } from './taskRunner';
 import {
   REFINE_SYSTEM,
@@ -33,37 +35,15 @@ interface PanelState {
   chatHistory: Partial<Record<Stage, ChatEntry[]>>;
 }
 
-type ProviderMode = 'codex_api' | 'codex_delegate';
+type GenerationProvider = 'lm' | 'codex-ui';
 
-interface DelegateRequest {
-  step_id: string;
-  kind: 'generate' | 'refine' | 'transform';
-  created_at: string;
+interface PendingGeneration {
   spec_name: string;
   stage: Stage;
-  goal: string;
-  inputs: {
-    system_prompt: string;
-    user_prompt: string;
-    source_files: string[];
-  };
-  outputs: {
-    target_files: string[];
-    receipt_path: string;
-  };
-  rules: string[];
-}
-
-interface DelegateReceipt {
   step_id: string;
-  status: 'ok' | 'error' | 'needs_input';
-  outputs_written?: string[];
-  message?: string;
-}
-
-function isCodexCommand(commandId: string): boolean {
-  const id = commandId.toLowerCase();
-  return id.startsWith('codex.') || id.startsWith('chatgpt.');
+  kind: 'generate' | 'refine' | 'transform';
+  startedAt: number;
+  isRefine: boolean;
 }
 
 export class SpecPanelProvider {
@@ -72,6 +52,9 @@ export class SpecPanelProvider {
   private ai: LMClient;
   private taskRunner: TaskRunner;
   private lastWriteTs = 0;
+  private pendingGeneration: PendingGeneration | null = null;
+  private pendingWarning: string | null = null;
+  private pendingWarningStage: Stage | null = null;
   private state: PanelState = {
     activeSpec: null,
     activeStage: 'requirements',
@@ -88,13 +71,15 @@ export class SpecPanelProvider {
     this.taskRunner = new TaskRunner((text) => this.postMessage({ type: 'taskOutput', text }));
   }
 
-  private getProviderMode(): ProviderMode {
-    const mode = vscode.workspace.getConfiguration('nspec').get<string>('provider', 'codex_delegate');
-    return mode === 'codex_api' ? 'codex_api' : 'codex_delegate';
+  private getGenerationProvider(): GenerationProvider {
+    const mode = vscode.workspace
+      .getConfiguration('nspec')
+      .get<string>('generationProvider', 'codex-ui');
+    return mode === 'lm' ? 'lm' : 'codex-ui';
   }
 
-  private isDelegateMode(): boolean {
-    return this.getProviderMode() === 'codex_delegate';
+  private isCodexUiMode(): boolean {
+    return this.getGenerationProvider() === 'codex-ui';
   }
 
   private getSpecsFolderName(): string {
@@ -107,125 +92,218 @@ export class SpecPanelProvider {
     return path.relative(wsRoot, filePath) || filePath;
   }
 
-  private collectDelegateSourceFiles(specName: string): string[] {
+  private getStageFilePath(specName: string, stage: Stage): string {
     const specsRoot = getSpecsRoot();
-    if (!specsRoot) return [];
+    if (!specsRoot) throw new Error('No specs root found. Open a workspace folder first.');
+    return path.join(specsRoot, specName, `${stage}.md`);
+  }
 
-    const specRoot = path.join(specsRoot, specName);
+  private getSpecRootPath(specName: string): string {
+    const specsRoot = getSpecsRoot();
+    if (!specsRoot) throw new Error('No specs root found. Open a workspace folder first.');
+    return path.join(specsRoot, specName);
+  }
+
+  private getExistingSpecStageFiles(specName: string): string[] {
+    const specRoot = this.getSpecRootPath(specName);
     const candidates = ['requirements.md', 'design.md', 'tasks.md', 'verify.md'].map((name) =>
       path.join(specRoot, name)
     );
-
-    return candidates.filter((file) => fs.existsSync(file)).map((file) => this.toWorkspaceRelativePath(file));
+    return candidates.filter((p) => fs.existsSync(p));
   }
 
-  private async waitForDelegateReceipt(
-    receiptPath: string,
-    expectedStepId: string,
-    token: vscode.CancellationToken,
-    timeoutMs = 20 * 60 * 1000
-  ): Promise<DelegateReceipt> {
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      if (token.isCancellationRequested) throw new Error('Generation cancelled.');
+  private setPendingWarning(message: string | null, stage: Stage | null = null): void {
+    const nextStage = stage ?? this.pendingGeneration?.stage ?? this.state.activeStage;
+    if (this.pendingWarning === message && this.pendingWarningStage === nextStage) return;
+    this.pendingWarning = message;
+    this.pendingWarningStage = nextStage;
+    if (!message) {
+      this.postMessage({ type: 'pendingMetaWarningCleared' });
+      return;
+    }
+    this.postMessage({ type: 'pendingMetaWarning', stage: nextStage, message });
+  }
 
-      if (fs.existsSync(receiptPath)) {
-        try {
-          const raw = fs.readFileSync(receiptPath, 'utf-8');
-          const receipt = JSON.parse(raw) as DelegateReceipt;
-          if (receipt.step_id !== expectedStepId) {
-            await new Promise((resolve) => setTimeout(resolve, 700));
-            continue;
-          }
-          return receipt;
-        } catch {
-          // Receipt might still be in-flight; keep waiting.
-        }
-      }
+  private clearGenerationState(): void {
+    this.state.generating = false;
+    this.state.cancelToken?.dispose();
+    this.state.cancelToken = null;
+  }
 
-      await new Promise((resolve) => setTimeout(resolve, 700));
+  private completePendingGeneration(content: string, pending: PendingGeneration): void {
+    this.clearGenerationState();
+    this.pendingGeneration = null;
+    this.setPendingWarning(null);
+
+    if (pending.kind === 'refine' && this.state.chatHistory[pending.stage]) {
+      this.state.chatHistory[pending.stage]!.push({
+        role: 'assistant',
+        text: ' Document updated.',
+      });
     }
 
-    throw new Error(
-      'Timed out waiting for Codex delegate receipt. Open Codex and complete the request file manually, then retry.'
-    );
+    if (pending.spec_name === this.state.activeSpec) {
+      this.state.contents[pending.stage] = content;
+      this.state.activeStage = pending.stage;
+      if (pending.stage === 'tasks') {
+        const progress = specManager.syncProgressFromMarkdown(pending.spec_name, content);
+        this.postMessage({ type: 'progressUpdated', progress });
+      }
+      this.postMessage({ type: 'streamDone', stage: pending.stage, content });
+    }
   }
 
-  private async runDelegateStageOperation(
+  private checkPendingGenerationFromDisk(): void {
+    const pending = this.pendingGeneration;
+    if (!pending) return;
+
+    const targetFile = this.getStageFilePath(pending.spec_name, pending.stage);
+    if (!fs.existsSync(targetFile)) return;
+
+    const content = fs.readFileSync(targetFile, 'utf-8');
+    const parsed = parseNspecMeta(content);
+    if (!parsed.hasMeta) {
+      this.setPendingWarning(
+        `Waiting for Codex update on ${pending.stage}. Missing nspec meta header. Use "Mark stage done" to recover.`,
+        pending.stage
+      );
+      return;
+    }
+
+    const metaStage = parsed.meta.stage;
+    const metaStep = parsed.meta.step_id;
+    if (metaStage !== pending.stage || metaStep !== pending.step_id) {
+      this.setPendingWarning(
+        `Waiting for Codex update on ${pending.stage}. Expected stage=${pending.stage}, step_id=${pending.step_id}. Use "Mark stage done" to recover.`,
+        pending.stage
+      );
+      return;
+    }
+
+    if (!isDone(parsed.meta)) {
+      this.setPendingWarning(null);
+      return;
+    }
+
+    this.completePendingGeneration(content, pending);
+  }
+
+  private buildCodexUiInstruction(relativeInstructionPath: string, relativeTargetPath: string): string {
+    return [
+      `Open and follow this instruction file exactly: ${relativeInstructionPath}`,
+      `Edit this target file in-place: ${relativeTargetPath}`,
+      'Do not stop at chat-only output. Apply file edits in the workspace.',
+    ].join('\n');
+  }
+
+  private writeCodexUiInstructionFile(
+    specName: string,
     stage: Stage,
-    kind: DelegateRequest['kind'],
+    stepId: string,
+    goal: string,
+    targetFile: string,
+    systemPrompt: string,
+    userPrompt: string
+  ): { filePath: string; relativePath: string } {
+    const specRoot = this.getSpecRootPath(specName);
+    const delegateDir = path.join(specRoot, '.nspec', 'codex-ui');
+    fs.mkdirSync(delegateDir, { recursive: true });
+    const filePath = path.join(delegateDir, `${stepId}.instruction.md`);
+    const relativePath = this.toWorkspaceRelativePath(filePath);
+    const relativeTargetPath = this.toWorkspaceRelativePath(targetFile);
+    const sourceFiles = this.getExistingSpecStageFiles(specName)
+      .map((p) => this.toWorkspaceRelativePath(p))
+      .filter((p) => p !== relativeTargetPath);
+
+    const content = [
+      '# nSpec Codex-UI Instruction',
+      '',
+      `- goal: ${goal}`,
+      `- stage: ${stage}`,
+      `- step_id: ${stepId}`,
+      `- target_file: ${relativeTargetPath}`,
+      '',
+      '## Source Files',
+      sourceFiles.length > 0 ? sourceFiles.map((f) => `- ${f}`).join('\n') : '- (none)',
+      '',
+      '## Required Actions',
+      '1. Open the target file and keep the existing `<!-- nspec: ... -->` header at top.',
+      '2. Preserve header values for `stage` and `step_id`.',
+      '3. Set `done: true` when complete.',
+      '4. Replace content below the header with the final markdown result.',
+      '5. Do not return chat-only output as the final result.',
+      '',
+      '## SYSTEM PROMPT',
+      '```text',
+      systemPrompt,
+      '```',
+      '',
+      '## USER INPUT',
+      '```text',
+      userPrompt,
+      '```',
+    ].join('\n');
+
+    fs.writeFileSync(filePath, content, 'utf-8');
+    return { filePath, relativePath };
+  }
+
+  private async startCodexUiStageOperation(
+    stage: Stage,
+    kind: PendingGeneration['kind'],
     goal: string,
     systemPrompt: string,
     userPrompt: string,
-    token: vscode.CancellationToken
-  ): Promise<{ status: 'ok'; content: string } | { status: 'needs_input'; message: string }> {
+    isRefine: boolean
+  ): Promise<void> {
     const specName = this.state.activeSpec;
     if (!specName) throw new Error('No active spec selected.');
 
-    const specsRoot = getSpecsRoot();
-    if (!specsRoot) throw new Error('No specs root found. Open a workspace folder first.');
-
-    const specRoot = path.join(specsRoot, specName);
-    const delegateRoot = path.join(specRoot, '.nspec');
-    const inboxDir = path.join(delegateRoot, 'inbox');
-    const outboxDir = path.join(delegateRoot, 'outbox');
-    fs.mkdirSync(inboxDir, { recursive: true });
-    fs.mkdirSync(outboxDir, { recursive: true });
-
-    const stepId = `${Date.now()}-${kind}-${stage}`;
-    const requestPath = path.join(inboxDir, `${stepId}.request.json`);
-    const receiptPath = path.join(outboxDir, `${stepId}.done.json`);
-    const targetFile = path.join(specRoot, `${stage}.md`);
-
-    const relativeRequestPath = this.toWorkspaceRelativePath(requestPath);
-    const relativeReceiptPath = this.toWorkspaceRelativePath(receiptPath);
+    const stepId = makeStepId(stage);
+    const targetFile = this.getStageFilePath(specName, stage);
     const relativeTargetPath = this.toWorkspaceRelativePath(targetFile);
-
-    const request: DelegateRequest = {
-      step_id: stepId,
-      kind,
-      created_at: new Date().toISOString(),
-      spec_name: specName,
+    const current = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, 'utf-8') : '';
+    const parsedCurrent = parseNspecMeta(current);
+    const seedBody = parsedCurrent.body.trim() ? parsedCurrent.body : '(waiting for Codex...)';
+    const primed = upsertNspecMeta(seedBody, {
       stage,
+      step_id: stepId,
+      done: 'false',
+    });
+    this.lastWriteTs = Date.now();
+    specManager.writeStage(specName, stage, primed);
+    this.state.contents[stage] = primed;
+
+    const instruction = this.writeCodexUiInstructionFile(
+      specName,
+      stage,
+      stepId,
       goal,
-      inputs: {
-        system_prompt: systemPrompt,
-        user_prompt: userPrompt,
-        source_files: this.collectDelegateSourceFiles(specName),
-      },
-      outputs: {
-        target_files: [relativeTargetPath],
-        receipt_path: relativeReceiptPath,
-      },
-      rules: [
-        'Read the request JSON and follow it exactly.',
-        `Write final markdown content to: ${relativeTargetPath}`,
-        `Always write a done receipt JSON to: ${relativeReceiptPath}`,
-        'Receipt shape: { step_id, status, outputs_written, message }',
-        'Use status "needs_input" with a single concise question when blocked.',
-      ],
-    };
-
-    fs.writeFileSync(requestPath, JSON.stringify(request, null, 2), 'utf-8');
-
-    const delegatePrompt = [
-      `Execute nSpec delegate request from file: ${relativeRequestPath}`,
-      '',
-      'Steps:',
-      '1. Open and read the request JSON file.',
-      '2. Perform the requested update on the target markdown file(s).',
-      '3. Write the required receipt JSON file with status.',
-      '4. Do not stop at chat-only output; file writes are required.',
-      '',
-      `Receipt path: ${relativeReceiptPath}`,
-    ].join('\n');
+      targetFile,
+      systemPrompt,
+      userPrompt
+    );
+    const codexPrompt = this.buildCodexUiInstruction(instruction.relativePath, relativeTargetPath);
 
     const allCommands = new Set(await vscode.commands.getCommands(true));
-    const startResult = await this.startCodexSession(
-      delegatePrompt,
+    const attachments = [
+      instruction.filePath,
+      targetFile,
+      ...this.getExistingSpecStageFiles(specName).filter((p) => p !== targetFile),
+    ];
+    const startResult = await startCodexSession(
+      codexPrompt,
       this.getSpecsFolderName(),
       specName,
-      allCommands
+      allCommands,
+      {
+        extraContextFiles: attachments,
+        codexTodo: {
+          filePath: instruction.filePath,
+          line: 1,
+          comment: codexPrompt,
+        },
+      }
     );
 
     if (!startResult.started) {
@@ -236,31 +314,27 @@ export class SpecPanelProvider {
           : '';
       const reason =
         startResult.failureReason === 'no_codex_commands'
-          ? 'No Codex/ChatGPT commands available to run delegate mode.'
-          : 'Could not auto-start Codex/ChatGPT delegate command.';
+          ? 'No Codex/ChatGPT commands available to run codex-ui provider.'
+          : startResult.failureReason === 'no_send_commands'
+            ? 'Codex commands were found, but none can submit an instruction from nSpec. Ensure `chatgpt.implementTodo` is available in this VS Code session.'
+          : 'Could not auto-start Codex/ChatGPT command.';
       throw new Error(reason + availableHint);
     }
 
+    this.pendingGeneration = {
+      spec_name: specName,
+      stage,
+      step_id: stepId,
+      kind,
+      startedAt: Date.now(),
+      isRefine,
+    };
+    this.setPendingWarning(null);
+
     this.postMessage({
       type: 'taskOutput',
-      text: `Delegate request queued: ${relativeRequestPath} via ${startResult.commandId}`,
+      text: `Codex update requested for ${relativeTargetPath} via ${startResult.commandId}. Instruction: ${instruction.relativePath}`,
     });
-
-    const receipt = await this.waitForDelegateReceipt(receiptPath, stepId, token);
-    if (receipt.status === 'needs_input') {
-      return {
-        status: 'needs_input',
-        message: receipt.message || 'Codex requested more input.',
-      };
-    }
-    if (receipt.status === 'error') {
-      throw new Error(receipt.message || 'Codex delegate reported an error.');
-    }
-    if (!fs.existsSync(targetFile)) {
-      throw new Error(`Delegate completed but output file was not written: ${relativeTargetPath}`);
-    }
-
-    return { status: 'ok', content: fs.readFileSync(targetFile, 'utf-8') };
   }
 
   // --- Public API ------------------------------------------------------------
@@ -268,8 +342,9 @@ export class SpecPanelProvider {
   /** Called by the file watcher when .specs/ files change externally. */
   refreshFromDisk() {
     // Skip if the extension itself just wrote (within 1.5s)
-    if (Date.now() - this.lastWriteTs < 1500) return;
+    if (Date.now() - this.lastWriteTs < 1500 && !this.pendingGeneration) return;
     if (!this.panel) return;
+    this.checkPendingGenerationFromDisk();
     this.sendInit();
   }
 
@@ -402,22 +477,24 @@ export class SpecPanelProvider {
       vibeSource: true,
     });
 
-    // Step 3: Extract description from transcript via LLM
     let extractedDescription = '';
-    await this.ai.streamCompletion(
-      VIBE_TO_SPEC_SYSTEM,
-      buildVibeToSpecPrompt(transcript),
-      (chunk) => {
-        extractedDescription += chunk;
-      },
-      () => {},
-      (err: string) => {
-        const clean = err.replace(/^[\s\S]*?Error:\s*/i, '').slice(0, 120);
-        vscode.window.showErrorMessage(
-          `nSpec: ${clean}${clean.length >= 120 ? '...' : ''}. Check Settings -> nSpec if it continues.`
-        );
-      }
-    );
+    if (!this.isCodexUiMode()) {
+      // Step 3: Extract description from transcript via LM provider.
+      await this.ai.streamCompletion(
+        VIBE_TO_SPEC_SYSTEM,
+        buildVibeToSpecPrompt(transcript),
+        (chunk) => {
+          extractedDescription += chunk;
+        },
+        () => {},
+        (err: string) => {
+          const clean = err.replace(/^[\s\S]*?Error:\s*/i, '').slice(0, 120);
+          vscode.window.showErrorMessage(
+            `nSpec: ${clean}${clean.length >= 120 ? '...' : ''}. Check Settings -> nSpec if it continues.`
+          );
+        }
+      );
+    }
 
     // Step 4: Save vibe context
     specManager.writeVibeContext(folderName, {
@@ -427,8 +504,18 @@ export class SpecPanelProvider {
       generatedAt: new Date().toISOString(),
     });
 
-    // Step 5: Generate requirements with transcript as extended context
-    const userPrompt = `${extractedDescription}\n\n---\n## Original Conversation Transcript\n${transcript}`;
+    // Step 5: Generate requirements with transcript as extended context.
+    const userPrompt = this.isCodexUiMode()
+      ? [
+          'Generate requirements directly from this conversation transcript.',
+          'Extract feature scope, decisions, constraints, and acceptance criteria.',
+          'Output a complete requirements.md.',
+          '',
+          '---',
+          '## Original Conversation Transcript',
+          transcript,
+        ].join('\n')
+      : `${extractedDescription}\n\n---\n## Original Conversation Transcript\n${transcript}`;
     await this.streamGenerate('requirements', userPrompt, specName);
 
     vscode.window.showInformationMessage('nSpec: Spec generated from conversation transcript.');
@@ -549,7 +636,7 @@ export class SpecPanelProvider {
           break;
 
         case 'cancelGeneration':
-          this.state.cancelToken?.cancel();
+          this.handleCancelGeneration();
           break;
 
         case 'validateSetup':
@@ -618,6 +705,10 @@ export class SpecPanelProvider {
             msg.template
           );
           break;
+
+        case 'markStageDone':
+          this.handleMarkStageDone();
+          break;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -663,6 +754,18 @@ export class SpecPanelProvider {
       contents: this.state.contents,
       requirementsFormat,
     });
+
+    if (
+      this.pendingWarning &&
+      this.pendingWarningStage &&
+      this.pendingGeneration?.spec_name === this.state.activeSpec
+    ) {
+      this.postMessage({
+        type: 'pendingMetaWarning',
+        stage: this.pendingWarningStage,
+        message: this.pendingWarning,
+      });
+    }
   }
 
   // --- Create spec -----------------------------------------------------------
@@ -734,11 +837,11 @@ export class SpecPanelProvider {
     _specType: string,
     _template: string
   ) {
-    if (this.isDelegateMode()) {
+    if (this.isCodexUiMode()) {
       this.postMessage({
         type: 'clarificationError',
         message:
-          'Clarification streaming is unavailable in delegate mode. Continue with spec creation and refine after file generation.',
+          'Clarification streaming is unavailable in codex-ui provider. Continue with spec creation and refine after file generation.',
       });
       return;
     }
@@ -911,42 +1014,26 @@ export class SpecPanelProvider {
     const cts = new vscode.CancellationTokenSource();
     this.postMessage({ type: 'streamStart', stage });
     try {
-      if (this.isDelegateMode()) {
-        const result = await this.runDelegateStageOperation(
-          stage,
-          'transform',
-          `Transform imported document into ${stage}.md`,
-          systemPrompt,
-          userPrompt,
-          cts.token
-        );
-
-        if (result.status === 'needs_input') {
-          this.postMessage({ type: 'error', message: result.message });
-          return;
+      if (this.isCodexUiMode()) {
+        this.state.generating = true;
+        this.state.cancelToken = null;
+        try {
+          await this.startCodexUiStageOperation(
+            stage,
+            'transform',
+            `Transform imported document into ${stage}.md`,
+            systemPrompt,
+            userPrompt,
+            false
+          );
+        } catch (err) {
+          this.clearGenerationState();
+          throw err;
         }
-
-        accumulated = result.content;
-        this.state.contents[stage] = accumulated;
-        if (stage === 'tasks') {
-          const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec!, accumulated);
-          this.postMessage({ type: 'progressUpdated', progress });
-        }
-        const currentSpec = this.state.activeSpec;
-        this.postMessage({ type: 'streamDone', stage, content: accumulated });
-        const requirementsFormat = currentSpec
-          ? (specManager.readConfig(currentSpec)?.requirementsFormat ?? undefined)
-          : undefined;
         this.postMessage({
-          type: 'specOpened',
-          specName: currentSpec ?? '',
-          activeStage: this.state.activeStage,
-          contents: this.state.contents,
-          progress: currentSpec ? specManager.readTaskProgress(currentSpec) : null,
-          hasCustomPrompts: currentSpec ? specManager.hasCustomPrompts(currentSpec) : false,
-          requirementsFormat,
+          type: 'taskOutput',
+          text: `Sent import transform for ${stage}.md to codex-ui. Waiting for file completion...`,
         });
-        vscode.window.showInformationMessage(`nSpec: Imported and transformed into ${stage}.md`);
         return;
       }
 
@@ -1137,41 +1224,23 @@ export class SpecPanelProvider {
 
     let accumulated = '';
 
-    if (this.isDelegateMode()) {
+    if (this.isCodexUiMode()) {
       try {
-        const result = await this.runDelegateStageOperation(
+        await this.startCodexUiStageOperation(
           stage,
           'generate',
           `Generate ${stage}.md for spec ${specName}`,
           systemPrompt,
           finalUserContent,
-          cts.token
+          false
         );
-
-        this.state.generating = false;
-        this.state.cancelToken = null;
-
-        if (result.status === 'needs_input') {
-          this.postMessage({ type: 'error', message: result.message });
-          return;
-        }
-
-        accumulated = result.content;
-        this.state.contents[stage] = accumulated;
         this.state.activeStage = stage;
-
-        if (this.state.activeSpec) {
-          this.lastWriteTs = Date.now();
-          if (stage === 'tasks') {
-            const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, accumulated);
-            this.postMessage({ type: 'progressUpdated', progress });
-          }
-        }
-
-        this.postMessage({ type: 'streamDone', stage, content: accumulated });
+        this.postMessage({
+          type: 'taskOutput',
+          text: `Sent ${stage}.md generation to codex-ui. Waiting for file completion...`,
+        });
       } catch (err) {
-        this.state.generating = false;
-        this.state.cancelToken = null;
+        this.clearGenerationState();
         const message = err instanceof Error ? err.message : String(err);
         this.postMessage({ type: 'error', message });
       }
@@ -1258,48 +1327,22 @@ export class SpecPanelProvider {
 
     let accumulated = '';
 
-    if (this.isDelegateMode()) {
+    if (this.isCodexUiMode()) {
       try {
-        const result = await this.runDelegateStageOperation(
+        await this.startCodexUiStageOperation(
           stage,
           'refine',
           `Refine ${stage}.md for spec ${this.state.activeSpec ?? ''}`,
           REFINE_SYSTEM,
           userPrompt,
-          cts.token
+          true
         );
-
-        this.state.generating = false;
-        this.state.cancelToken = null;
-
-        if (result.status === 'needs_input') {
-          const answer = result.message;
-          if (this.state.chatHistory[stage]) {
-            this.state.chatHistory[stage]!.push({ role: 'assistant', text: answer });
-          }
-          this.postMessage({ type: 'inquiryDone', stage, answer });
-          return;
-        }
-
-        accumulated = result.content;
-        if (this.state.chatHistory[stage]) {
-          this.state.chatHistory[stage]!.push({
-            role: 'assistant',
-            text: ' Document updated.',
-          });
-        }
-        this.state.contents[stage] = accumulated;
-        if (this.state.activeSpec) {
-          this.lastWriteTs = Date.now();
-          if (stage === 'tasks') {
-            const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, accumulated);
-            this.postMessage({ type: 'progressUpdated', progress });
-          }
-        }
-        this.postMessage({ type: 'streamDone', stage, content: accumulated });
+        this.postMessage({
+          type: 'taskOutput',
+          text: `Sent ${stage}.md refinement to codex-ui. Waiting for file completion...`,
+        });
       } catch (err) {
-        this.state.generating = false;
-        this.state.cancelToken = null;
+        this.clearGenerationState();
         const message = err instanceof Error ? err.message : String(err);
         this.postMessage({ type: 'error', message });
       }
@@ -1357,6 +1400,47 @@ export class SpecPanelProvider {
     );
   }
 
+  private handleCancelGeneration() {
+    this.state.cancelToken?.cancel();
+    this.clearGenerationState();
+    this.pendingGeneration = null;
+    this.setPendingWarning(null);
+    this.postMessage({ type: 'error', message: 'Generation cancelled.' });
+  }
+
+  private handleMarkStageDone() {
+    if (!this.state.activeSpec) return;
+    const pending = this.pendingGeneration;
+    const stage = pending?.stage ?? this.state.activeStage;
+    const stepId = pending?.step_id ?? makeStepId(stage);
+    const targetFile = this.getStageFilePath(this.state.activeSpec, stage);
+    const current = fs.existsSync(targetFile) ? fs.readFileSync(targetFile, 'utf-8') : '';
+    const parsed = parseNspecMeta(current);
+    const body = parsed.body.trim() ? parsed.body : current;
+    const patched = upsertNspecMeta(body, {
+      stage,
+      step_id: stepId,
+      done: 'true',
+    });
+
+    this.lastWriteTs = Date.now();
+    specManager.writeStage(this.state.activeSpec, stage, patched);
+
+    if (pending && pending.stage === stage && pending.step_id === stepId) {
+      this.completePendingGeneration(patched, pending);
+    } else {
+      this.state.contents[stage] = patched;
+      if (stage === 'tasks') {
+        const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, patched);
+        this.postMessage({ type: 'progressUpdated', progress });
+      }
+      this.postMessage({ type: 'streamDone', stage, content: patched });
+    }
+
+    this.setPendingWarning(null);
+    this.postMessage({ type: 'taskOutput', text: `Marked ${stage}.md done for step ${stepId}.` });
+  }
+
   // --- Manual save ----------------------------------------------------------
 
   private handleSaveContent(stage: Stage, content: string) {
@@ -1404,12 +1488,7 @@ export class SpecPanelProvider {
     const prompt = this.buildRunCheckedPrompt(specPath, selectedTasks);
 
     const allCommands = new Set(await vscode.commands.getCommands(true));
-    const startResult = await this.startCodexSession(
-      prompt,
-      specsFolder,
-      this.state.activeSpec,
-      allCommands
-    );
+    const startResult = await startCodexSession(prompt, specsFolder, this.state.activeSpec, allCommands);
 
     if (!startResult.started) {
       const availableHint =
@@ -1420,6 +1499,8 @@ export class SpecPanelProvider {
       const reason =
         startResult.failureReason === 'no_codex_commands'
           ? 'No Codex/ChatGPT commands are available in this VS Code session. Install/enable the OpenAI extension, then reload the window.'
+          : startResult.failureReason === 'no_send_commands'
+            ? 'Codex commands are present, but this session does not expose a prompt-submit command (`chatgpt.implementTodo`). Reload VS Code and retry.'
           : 'Found Codex/ChatGPT commands, but nSpec could not start a Codex session automatically. Open Codex once and retry.';
       const message = reason + availableHint;
       this.postMessage({
@@ -1433,15 +1514,6 @@ export class SpecPanelProvider {
     vscode.window.showInformationMessage(
       'nSpec: Run checked sent to Codex via ' + startResult.commandId + ' and auto-submitted.'
     );
-  }
-
-  private getSpecContextFiles(specsFolder: string, specName: string): string[] {
-    const wsRoot = this.getWorkspaceRoot();
-    if (!wsRoot) return [];
-    const files = ['requirements.md', 'design.md', 'tasks.md'] as const;
-    return files
-      .map((fileName) => path.resolve(wsRoot, specsFolder, specName, fileName))
-      .filter((filePath) => fs.existsSync(filePath));
   }
 
   private trimForPrompt(text: string, maxChars = 8000): string {
@@ -1481,115 +1553,6 @@ export class SpecPanelProvider {
     ].join('\n');
   }
 
-  private getCodexCommandCandidates(allCommands: Set<string>): string[] {
-    const preferred = [
-      'chatgpt.newCodexPanel',
-      'chatgpt.newChat',
-      'chatgpt.openSidebar',
-      'chatgpt.openCommandMenu',
-      'chatgpt.addToThread',
-      'chatgpt.addFileToThread',
-      'codex.startSession',
-      'codex.start',
-      'codex.newChat',
-      'codex.openChat',
-      'codex.chat.start',
-      'codex.sendMessage',
-      'codex.sendPrompt',
-      'codex.runPrompt',
-      'codex.execute',
-      'codex.executePrompt',
-      'codex.chat.send',
-      'codex.chat.submit',
-    ];
-
-    const availableCodex = Array.from(allCommands)
-      .filter(isCodexCommand)
-      .sort();
-
-    const heuristic = availableCodex.filter((cmd) =>
-      /(start|session|chat|prompt|send|run|execute|submit)/i.test(cmd)
-    );
-
-    const ordered = [...preferred.filter((cmd) => allCommands.has(cmd)), ...heuristic];
-    return Array.from(new Set(ordered));
-  }
-
-  private async tryStartCodexWithCommand(
-    commandId: string,
-    prompt: string,
-    specsFolder: string,
-    specName: string
-  ): Promise<boolean> {
-    const contextFiles = this.getSpecContextFiles(specsFolder, specName);
-    const contextUris = contextFiles.map((filePath) => vscode.Uri.file(filePath));
-
-    const attempts: unknown[][] = [
-      [{ prompt, autoSubmit: true, contextFiles }],
-      [{ prompt, autoSubmit: true, contextUris }],
-      [{ prompt, autoSubmit: true, files: contextFiles }],
-      [{ prompt, autoSubmit: true, files: contextUris }],
-      [{ prompt, autoSubmit: true, attachments: contextUris }],
-      [{ prompt, autoSubmit: true, context: contextUris }],
-      [{ prompt, autoSubmit: true }],
-      [{ prompt }],
-      [prompt, contextUris],
-      [prompt, contextFiles],
-      [prompt],
-    ];
-
-    for (const args of attempts) {
-      try {
-        await vscode.commands.executeCommand(commandId, ...args);
-        return true;
-      } catch {
-        // Try next shape.
-      }
-    }
-
-    return false;
-  }
-
-  private async startCodexSession(
-    prompt: string,
-    specsFolder: string,
-    specName: string,
-    allCommands: Set<string>
-  ): Promise<{
-    started: boolean;
-    commandId: string;
-    availableCodexCommands: string[];
-    failureReason: 'none' | 'no_codex_commands' | 'invoke_failed';
-  }> {
-    const availableCodexCommands = Array.from(allCommands)
-      .filter(isCodexCommand)
-      .sort();
-
-    const candidates = this.getCodexCommandCandidates(allCommands);
-    if (candidates.length === 0) {
-      return {
-        started: false,
-        commandId: 'none',
-        availableCodexCommands,
-        failureReason: 'no_codex_commands',
-      };
-    }
-
-    for (const commandId of candidates) {
-      const ok = await this.tryStartCodexWithCommand(commandId, prompt, specsFolder, specName);
-      if (ok) {
-        return { started: true, commandId, availableCodexCommands, failureReason: 'none' };
-      }
-    }
-
-    return {
-      started: false,
-      commandId: 'none',
-      availableCodexCommands,
-      failureReason: 'invoke_failed',
-    };
-  }
-
   private async notifyCodexUnavailable(message: string): Promise<void> {
     const action = await vscode.window.showErrorMessage(
       `nSpec: ${message}`,
@@ -1605,11 +1568,11 @@ export class SpecPanelProvider {
   }
 
   private async handleRunTaskSupervised(taskLabel: string) {
-    if (this.isDelegateMode()) {
+    if (this.isCodexUiMode()) {
       this.postMessage({
         type: 'error',
         message:
-          'Supervised tool-calling run requires API mode. In delegate mode, use "Run checked" so Codex writes files directly.',
+          'Supervised tool-calling run requires lm provider. In codex-ui provider, use "Run checked" so Codex writes files directly.',
       });
       return;
     }
@@ -1652,11 +1615,11 @@ export class SpecPanelProvider {
   }
 
   private async handleRunAllTasksSupervised() {
-    if (this.isDelegateMode()) {
+    if (this.isCodexUiMode()) {
       this.postMessage({
         type: 'error',
         message:
-          'Run all supervised requires API mode. In delegate mode, use "Run checked" to delegate task execution to Codex.',
+          'Run all supervised requires lm provider. In codex-ui provider, use "Run checked" to delegate task execution to Codex.',
       });
       return;
     }
@@ -1745,6 +1708,11 @@ export class SpecPanelProvider {
 
   private handleDeleteSpec(specName: string) {
     specManager.deleteSpec(specName);
+    if (this.pendingGeneration?.spec_name === specName) {
+      this.pendingGeneration = null;
+      this.clearGenerationState();
+      this.setPendingWarning(null);
+    }
     if (this.state.activeSpec === specName) {
       this.state = {
         activeSpec: null,

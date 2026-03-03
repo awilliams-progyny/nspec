@@ -2,7 +2,7 @@
   "name": "nSpec",
   "displayName": "nSpec",
   "description": "Generate and maintain structured specs (Requirements → Design → Tasks → Verify) with Codex, custom prompts, hooks, and verification for spec-driven development.",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "awilliams",
   "engines": {
     "vscode": "^1.93.0"
@@ -40,6 +40,7 @@
     "onCommand:nspec.checkTasks",
     "onCommand:nspec.validateSetup",
     "onCommand:nspec.diagnoseCodex",
+    "onCommand:nspec.probeCodexWriteTestFile",
     "onView:nspec.welcomeView"
   ],
   "main": "./out/extension.js",
@@ -77,6 +78,10 @@
       {
         "command": "nspec.diagnoseCodex",
         "title": "nSpec: Diagnose Codex Models"
+      },
+      {
+        "command": "nspec.probeCodexWriteTestFile",
+        "title": "nSpec: Probe Codex Write test.md"
       }
     ],
     "viewsContainers": {
@@ -133,25 +138,28 @@
         },
         {
           "command": "nspec.diagnoseCodex"
+        },
+        {
+          "command": "nspec.probeCodexWriteTestFile"
         }
       ]
     },
     "configuration": {
       "title": "nSpec",
       "properties": {
-        "nspec.provider": {
+        "nspec.generationProvider": {
           "type": "string",
           "enum": [
-            "codex_delegate",
-            "codex_api"
+            "codex-ui",
+            "lm"
           ],
-          "default": "codex_delegate",
-          "description": "Generation provider mode. codex_delegate uses Codex/ChatGPT command delegation with file handshake. codex_api uses direct OpenAI API."
+          "default": "codex-ui",
+          "description": "Generation provider mode. codex-ui delegates stage file edits to Codex/ChatGPT commands. lm uses direct API generation via LMClient."
         },
         "nspec.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Codex API key used by nSpec generation. Prefer setting this in User Settings, or use NSPEC_API_KEY / OPENAI_API_KEY environment variables."
+          "description": "Codex API key used when generationProvider is set to lm. Prefer setting this in User Settings, or use NSPEC_API_KEY / OPENAI_API_KEY environment variables."
         },
         "nspec.apiBaseUrl": {
           "type": "string",

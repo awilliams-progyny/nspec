@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { SpecPanelProvider } from './SpecPanelProvider';
 import { loadHooks, scaffoldExamples } from './core/specStore';
 import { runMatchingHooks, HookTrigger } from './core/hooks';
 import { getSpecsRoot, getWorkspaceRoot } from './workspace';
+import { detectCodexCommands, startCodexSession } from './codexBridge';
 import {
   getCodexApiConfig,
   getCodexApiConfigOrThrow,
@@ -14,16 +17,11 @@ import {
 let provider: SpecPanelProvider | undefined;
 let hooksOutputChannel: vscode.OutputChannel | undefined;
 let activationOutputChannel: vscode.OutputChannel | undefined;
-type NspecProviderMode = 'codex_api' | 'codex_delegate';
+type GenerationProvider = 'lm' | 'codex-ui';
 
-function isCodexCommand(commandId: string): boolean {
-  const id = commandId.toLowerCase();
-  return id.startsWith('codex.') || id.startsWith('chatgpt.');
-}
-
-function getProviderMode(): NspecProviderMode {
-  const mode = vscode.workspace.getConfiguration('nspec').get<string>('provider', 'codex_delegate');
-  return mode === 'codex_api' ? 'codex_api' : 'codex_delegate';
+function getGenerationProvider(): GenerationProvider {
+  const mode = vscode.workspace.getConfiguration('nspec').get<string>('generationProvider', 'codex-ui');
+  return mode === 'lm' ? 'lm' : 'codex-ui';
 }
 
 function logActivation(message: string, err?: unknown) {
@@ -112,6 +110,12 @@ export function activate(context: vscode.ExtensionContext) {
       void runCommand('Diagnose Codex models', async () => {
         await diagnoseCodexModels();
       });
+    }),
+
+    vscode.commands.registerCommand('nspec.probeCodexWriteTestFile', () => {
+      void runCommand('Probe Codex instruction write', async () => {
+        await probeCodexWriteTestFile();
+      });
     })
   );
 
@@ -159,24 +163,29 @@ function codexModelFailureMessage(reason: CodexModelDiagnostics['unavailableReas
 
 async function ensureCodexAvailableAtStartup() {
   try {
-    const mode = getProviderMode();
-    if (mode === 'codex_api') {
+    const provider = getGenerationProvider();
+    if (provider === 'lm') {
       const cfg = getCodexApiConfigOrThrow();
       logActivation(
-        `Startup Codex API check passed: model=${cfg.model}, baseUrl=${cfg.baseUrl}, keySource=${cfg.apiKeySource}`
+        `Startup LM provider check passed: model=${cfg.model}, baseUrl=${cfg.baseUrl}, keySource=${cfg.apiKeySource}`
       );
       return;
     }
 
     const commands = await vscode.commands.getCommands(true);
-    const codexCommands = commands.filter(isCodexCommand);
-    if (codexCommands.length === 0) {
+    const codex = await detectCodexCommands(new Set(commands));
+    if (codex.all.length === 0) {
       throw new Error(
-        'No Codex/ChatGPT commands detected for delegate mode. Install/enable OpenAI extension and reload VS Code.'
+        'No Codex/ChatGPT commands detected for codex-ui mode. Install/enable OpenAI extension and reload VS Code.'
+      );
+    }
+    if (codex.sendCapable.length === 0) {
+      throw new Error(
+        'Codex/ChatGPT commands were detected, but none can submit prompts from nSpec. Ensure `chatgpt.implementTodo` is available and reload VS Code.'
       );
     }
     logActivation(
-      `Startup Codex delegate check passed: commands=${codexCommands.slice(0, 8).join(', ')}`
+      `Startup codex-ui provider check passed: send-capable commands=${codex.sendCapable.slice(0, 8).join(', ')}`
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -186,16 +195,16 @@ async function ensureCodexAvailableAtStartup() {
 }
 
 async function diagnoseCodexModels() {
-  const mode = getProviderMode();
+  const provider = getGenerationProvider();
   const apiConfig = getCodexApiConfig();
   const codexExtension = vscode.extensions.getExtension('openai.chatgpt');
   const allCommands = await vscode.commands.getCommands(true);
-  const codexCommands = allCommands.filter(isCodexCommand).sort();
+  const codex = await detectCodexCommands(new Set(allCommands));
   const diagnostics = await getCodexModelDiagnostics();
   const report: string[] = [];
   report.push('nSpec Codex Diagnostics');
   report.push('----------------------');
-  report.push(`Provider mode: ${mode}`);
+  report.push(`Generation provider: ${provider}`);
   report.push(`Codex API configured: ${apiConfig ? 'yes' : 'no'}`);
   if (apiConfig) {
     report.push(`Codex API model: ${apiConfig.model}`);
@@ -205,9 +214,13 @@ async function diagnoseCodexModels() {
     report.push('Codex API key source: (none)');
   }
   report.push(`Codex extension installed: ${codexExtension ? 'yes' : 'no'}`);
-  report.push(`Codex/ChatGPT commands detected: ${codexCommands.length}`);
-  if (codexCommands.length > 0) {
-    report.push(`Command sample: ${codexCommands.slice(0, 8).join(', ')}`);
+  report.push(`Codex/ChatGPT commands detected: ${codex.all.length}`);
+  if (codex.all.length > 0) {
+    report.push(`Command sample: ${codex.all.slice(0, 8).join(', ')}`);
+  }
+  report.push(`Send-capable Codex commands: ${codex.sendCapable.length}`);
+  if (codex.sendCapable.length > 0) {
+    report.push(`Send-capable sample: ${codex.sendCapable.slice(0, 8).join(', ')}`);
   }
   report.push(`Detected models: ${diagnostics.allModels.length}`);
   report.push(`Selector matches: ${diagnostics.selectorMatches.length}`);
@@ -241,38 +254,39 @@ async function diagnoseCodexModels() {
   }
   activationOutputChannel?.show(true);
 
-  if (mode === 'codex_delegate') {
-    if (codexCommands.length > 0) {
+  if (provider === 'codex-ui') {
+    if (codex.sendCapable.length > 0) {
       await vscode.window.showInformationMessage(
-        'nSpec: Delegate mode is ready (Codex/ChatGPT commands detected). See Output -> nSpec for diagnostics.'
+        'nSpec: codex-ui provider is ready (prompt-submit Codex command detected). See Output -> nSpec for diagnostics.'
       );
       return;
     }
     await vscode.window.showErrorMessage(
-      'nSpec: Delegate mode is selected, but no Codex/ChatGPT commands were detected. Install/enable the OpenAI extension and reload window.'
+      'nSpec: codex-ui provider is selected, but no prompt-submit Codex command was detected. Ensure `chatgpt.implementTodo` is available and reload window.'
     );
     return;
   }
 
   if (apiConfig) {
     await vscode.window.showInformationMessage(
-      'nSpec: Codex API mode is configured. See Output -> nSpec for diagnostics.'
+      'nSpec: lm provider is configured. See Output -> nSpec for diagnostics.'
     );
     return;
   }
 
   await vscode.window.showErrorMessage(
-    'nSpec: Codex API mode is selected, but API key is not configured. Set `nspec.apiKey` or `NSPEC_API_KEY`/`OPENAI_API_KEY`.'
+    'nSpec: lm provider is selected, but API key is not configured. Set `nspec.apiKey` or `NSPEC_API_KEY`/`OPENAI_API_KEY`.'
   );
 }
 
 async function validateSetup() {
-  const providerMode = getProviderMode();
+  const providerMode = getGenerationProvider();
   const workspaceCount = vscode.workspace.workspaceFolders?.length ?? 0;
   const specsRoot = getSpecsRoot();
   const apiConfig = getCodexApiConfig();
   const allCommands = new Set(await vscode.commands.getCommands(true));
   const codexExtension = vscode.extensions.getExtension('openai.chatgpt');
+  const codex = await detectCodexCommands(allCommands);
 
   let diagnostics: CodexModelDiagnostics | null = null;
   let lmLookupError = '';
@@ -291,16 +305,16 @@ async function validateSetup() {
     'nspec.checkTasks',
     'nspec.validateSetup',
     'nspec.diagnoseCodex',
+    'nspec.probeCodexWriteTestFile',
   ];
 
   const missingNspecCommands = expectedNspecCommands.filter((cmd) => !allCommands.has(cmd));
-  const codexCommands = Array.from(allCommands).filter(isCodexCommand).sort();
   const codexApiReady = apiConfig !== null;
 
   const report: string[] = [];
   report.push('nSpec Setup Validation');
   report.push('----------------------');
-  report.push(`Provider mode: ${providerMode}`);
+  report.push(`Generation provider: ${providerMode}`);
   report.push(`Workspace folders: ${workspaceCount > 0 ? workspaceCount : 'none'}`);
   report.push(`Specs folder: ${specsRoot ?? '(no workspace open)'}`);
   report.push(`Codex API configured: ${codexApiReady ? 'yes' : 'no'}`);
@@ -310,9 +324,13 @@ async function validateSetup() {
     report.push(`Codex API key source: ${apiConfig.apiKeySource}`);
   }
   report.push(`OpenAI Codex extension detected: ${codexExtension ? 'yes' : 'no'}`);
-  report.push(`Codex/ChatGPT commands detected: ${codexCommands.length}`);
-  if (codexCommands.length > 0) {
-    report.push(`Command sample: ${codexCommands.slice(0, 8).join(', ')}`);
+  report.push(`Codex/ChatGPT commands detected: ${codex.all.length}`);
+  if (codex.all.length > 0) {
+    report.push(`Command sample: ${codex.all.slice(0, 8).join(', ')}`);
+  }
+  report.push(`Send-capable Codex commands: ${codex.sendCapable.length}`);
+  if (codex.sendCapable.length > 0) {
+    report.push(`Send-capable sample: ${codex.sendCapable.slice(0, 8).join(', ')}`);
   }
 
   if (diagnostics) {
@@ -348,14 +366,19 @@ async function validateSetup() {
   const warnings: string[] = [];
   if (workspaceCount === 0) warnings.push('No workspace folder is open.');
   if (missingNspecCommands.length > 0) errors.push('Some nSpec commands were not registered.');
-  if (providerMode === 'codex_api' && !codexApiReady) {
+  if (providerMode === 'lm' && !codexApiReady) {
     errors.push(
-      'Codex API key is not configured. Set nSpec setting `nspec.apiKey` or environment variable `NSPEC_API_KEY`/`OPENAI_API_KEY`.'
+      'LM provider requires an API key. Set nSpec setting `nspec.apiKey` or environment variable `NSPEC_API_KEY`/`OPENAI_API_KEY`.'
     );
   }
-  if (providerMode === 'codex_delegate' && codexCommands.length === 0) {
+  if (providerMode === 'codex-ui' && codex.all.length === 0) {
     errors.push(
-      'Delegate mode requires Codex/ChatGPT commands (`codex.*` or `chatgpt.*`), but none were found.'
+      'codex-ui provider requires Codex/ChatGPT commands (`codex.*` or `chatgpt.*`), but none were found.'
+    );
+  }
+  if (providerMode === 'codex-ui' && codex.all.length > 0 && codex.sendCapable.length === 0) {
+    errors.push(
+      'codex-ui provider found Codex/ChatGPT commands, but none can submit prompts. Ensure `chatgpt.implementTodo` is available.'
     );
   }
   if (!codexExtension && !codexApiReady) {
@@ -401,6 +424,119 @@ async function validateSetup() {
     actionLabel
   );
   if (choice === actionLabel) activationOutputChannel?.show(true);
+}
+
+function probeMessage(startedAt: number, message: string): void {
+  const elapsedMs = Date.now() - startedAt;
+  activationOutputChannel?.appendLine(`[probe +${elapsedMs}ms] ${message}`);
+}
+
+async function waitForFileContains(
+  filePath: string,
+  needle: string,
+  timeoutMs: number
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(filePath)) {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      if (content.includes(needle)) return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return false;
+}
+
+async function probeCodexWriteTestFile() {
+  const startedAt = Date.now();
+  const providerMode = getGenerationProvider();
+  if (providerMode !== 'codex-ui') {
+    throw new Error('Probe requires `nspec.generationProvider = codex-ui`.');
+  }
+
+  const wsRoot = getWorkspaceRoot();
+  if (!wsRoot) {
+    throw new Error('No workspace folder is open.');
+  }
+
+  const specsFolder = vscode.workspace.getConfiguration('nspec').get<string>('specsFolder', '.specs');
+  const probeDir = path.join(wsRoot, specsFolder, '_probe');
+  fs.mkdirSync(probeDir, { recursive: true });
+
+  const stepId = `codex-write-probe-${Date.now().toString(36)}`;
+  const sentinel = `nspec-codex-probe-${Date.now().toString(36)}`;
+  const targetFile = path.join(wsRoot, 'test.md');
+  const instructionFile = path.join(probeDir, `${stepId}.instruction.md`);
+
+  const relativeInstruction = path.relative(wsRoot, instructionFile) || instructionFile;
+  const relativeTarget = path.relative(wsRoot, targetFile) || targetFile;
+  const instruction = [
+    '# nSpec Codex Probe Instruction',
+    '',
+    `- probe_id: ${stepId}`,
+    `- target_file: ${relativeTarget}`,
+    `- sentinel: ${sentinel}`,
+    '',
+    '## Required Actions',
+    `1. Create or overwrite \`${relativeTarget}\` in the workspace.`,
+    '2. Write exactly markdown content (no chat-only response):',
+    '',
+    '```md',
+    '# Codex Instruction Probe',
+    '',
+    `probe_id: ${stepId}`,
+    `sentinel: ${sentinel}`,
+    'status: success',
+    '```',
+    '',
+    '3. Save the file.',
+  ].join('\n');
+  fs.writeFileSync(instructionFile, instruction, 'utf-8');
+
+  const codexPrompt = [
+    `Open and execute this instruction file exactly: ${relativeInstruction}`,
+    `Create/update this file in-place: ${relativeTarget}`,
+    'Do not stop at chat output. Apply the file write in the workspace.',
+  ].join('\n');
+
+  probeMessage(startedAt, `Wrote instruction file: ${relativeInstruction}`);
+
+  const allCommands = new Set(await vscode.commands.getCommands(true));
+  const startResult = await startCodexSession(codexPrompt, specsFolder, '_probe', allCommands, {
+    extraContextFiles: [instructionFile, ...(fs.existsSync(targetFile) ? [targetFile] : [])],
+    codexTodo: {
+      filePath: instructionFile,
+      line: 1,
+      comment: codexPrompt,
+    },
+  });
+
+  if (!startResult.started) {
+    const cmdHint =
+      startResult.availableCodexCommands.length > 0
+        ? ` Commands: ${startResult.availableCodexCommands.join(', ')}`
+        : '';
+    throw new Error(
+      `Probe dispatch failed (${startResult.failureReason}).${cmdHint}`
+    );
+  }
+
+  probeMessage(startedAt, `Dispatched via ${startResult.commandId}. Waiting for ${relativeTarget}...`);
+  const ok = await waitForFileContains(targetFile, sentinel, 90_000);
+  if (!ok) {
+    probeMessage(startedAt, `Timeout waiting for sentinel in ${relativeTarget}`);
+    activationOutputChannel?.show(true);
+    await vscode.window.showWarningMessage(
+      `nSpec probe sent to Codex, but ${relativeTarget} did not contain sentinel within 90s. Check Codex chat and Output -> nSpec.`
+    );
+    return;
+  }
+
+  probeMessage(startedAt, `Success. Sentinel detected in ${relativeTarget}`);
+  activationOutputChannel?.show(true);
+  await vscode.window.showInformationMessage(
+    `nSpec probe succeeded: ${relativeTarget} was written by Codex instruction.`
+  );
 }
 
 async function promptExamplesIfNew() {

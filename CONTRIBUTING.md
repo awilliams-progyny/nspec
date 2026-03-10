@@ -1,6 +1,6 @@
 # Contributing to nSpec
 
-Thanks for your interest in contributing. This file covers building, testing, and linting so you can run the extension locally and prepare changes.
+Thanks for your interest in contributing. This file covers build, test, and quality workflows used by this repository.
 
 ## Prerequisites
 
@@ -20,19 +20,25 @@ npm run compile
 - **Watch mode:** `npm run watch` — recompiles on file changes.
 - **Package VSIX:** `npm run package` — produces `nSpec-*.vsix` for **Install from VSIX**.
 
-## Lint and format
+## Quality checks
 
-- **Lint:** `npm run lint` — runs ESLint.
+- **Lint:** `npm run lint` — developer-friendly lint run.
+- **Strict lint:** `npm run lint:strict` — fails on any warning.
 - **Lint (fix):** `npm run lint:fix` — applies auto-fixes.
 - **Format:** `npm run format` — runs Prettier.
 - **Format check:** `npm run format:check` — checks formatting without writing.
+- **Typecheck:** `npm run typecheck` — TypeScript type check without emit.
+- **Aggregate gate:** `npm run quality:check` — strict lint + format check + typecheck + unit tests.
+- **Docs guardrail:** `npm run docs:check` — local markdown link checks + version parity + `_sections` removed/unsupported drift checks.
+- **Security guardrail:** `npm run audit:gate` — fails on new high/critical vulnerabilities not in baseline.
 
-Please run `npm run lint` and `npm run format:check` (or fix/format) before submitting changes so CI stays green.
+Please run `npm run quality:check`, `npm run docs:check`, and `npm run audit:gate` before opening a PR.
 
 ## Tests
 
 - **Unit tests:** `npm test` — runs the unit test suite (core logic: task parsing, folder names, hook resolution).
-- **Extension tests:** Use the **Run Extension Tests** launch config in VS Code/Cursor (runs the extension host test suite).
+- **Extension tests (manual):** `npm run test:extension` or the **Run Extension Tests** launch config in VS Code/Cursor.
+- The extension-host test flow uses `test-workspace/` as a committed fixture workspace path.
 
 Running these before pushing helps catch regressions.
 
@@ -49,7 +55,7 @@ Running these before pushing helps catch regressions.
 ## Submitting changes
 
 1. Open an issue or pick an existing one to align scope.
-2. Create a branch, make changes, run `npm run compile`, `npm run lint`, and `npm run format:check`.
+2. Create a branch, make changes, run `npm run quality:check`, `npm run docs:check`, and `npm run audit:gate`.
 3. Run the extension via **Run Extension** and manually test the flows you touched.
 4. Open a pull request with a short description and, if relevant, a link to the issue.
 

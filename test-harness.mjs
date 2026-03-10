@@ -415,7 +415,7 @@ Input: ${(FEATURE_DESC || '(from input-dir)').slice(0, 120)}
 ## Prompt tuning hints
 Review \`_prompts/\` to see exactly what was sent. Common tweaks:
 
-- Requirements too vague? Add domain-specific sections via --steering or _sections/
+- Requirements too vague? Add domain-specific context via steering files or `_prompts/`
 - Design too generic? Add "Include code snippets for key interfaces" to DESIGN template
 - Tasks missing coverage? Add "Cross-reference every FR-N" to TASKS template
 - Score inflated? Try --verify-scheme committee for multi-perspective scoring

@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import Mocha from 'mocha';
 
 export async function run(): Promise<void> {
-  const mocha = new Mocha({ ui: 'bdd', timeout: 60000, color: true });
+  const mocha = new Mocha({ ui: 'tdd', timeout: 60000, color: true });
   const testsRoot = path.resolve(__dirname);
 
   const files = fs.readdirSync(testsRoot).filter((f) => f.endsWith('.test.js'));

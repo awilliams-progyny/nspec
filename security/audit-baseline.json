@@ -1,0 +1,8 @@
+{
+  "allowedKeys": [
+    "mocha|via:serialize-javascript|severity:high",
+    "serialize-javascript|source:1113686|name:serialize-javascript|severity:high"
+  ],
+  "notes": "Baseline for known dev-only advisories as of 2026-03-10. New high/critical findings should fail audit:gate.",
+  "updatedAt": "2026-03-10"
+}

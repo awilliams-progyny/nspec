@@ -1,310 +1,198 @@
 # nSpec — Agent Instructions
 
-> This file teaches coding agents (Codex, Cursor, etc.) how to work with the nSpec spec system.
+This file is the contract for coding agents working with nSpec specs and CLI workflows.
 
-## What is nSpec?
+## What nSpec Does
 
-nSpec is a requirements-first planning system. Before writing code, you create structured specifications:
-**Requirements → Design → Tasks → Verify**
+nSpec is a spec-first workflow:
 
-Each spec lives in `.specs/<name>/` as markdown files. This gives you a traceable, verifiable plan before touching any code.
+```text
+Requirements -> Design -> Tasks -> Verify
+```
+
+Each spec is stored as markdown under `.specs/<name>/`.
 
 ## Folder Structure
 
-```
+```text
 .specs/
 ├── <spec-name>/
-│   ├── spec.config.json        # Auto-generated metadata
-│   ├── requirements.md         # Functional & non-functional requirements
-│   ├── design.md               # Technical architecture & component breakdown
-│   ├── tasks.md                # Checkbox implementation plan with effort estimates
-│   ├── verify.md               # Health score, coverage matrix, gap analysis
-│   ├── _progress.json          # Task completion tracking
-│   ├── _steering.md            # (optional) Domain context for this spec
-│   ├── _role.md                # (optional, legacy) Role fallback (prefer steering skills)
-│   └── _prompts/               # (optional) Full prompt overrides per stage
-│       └── requirements.md, design.md, tasks.md, verify.md
-├── steering/                   # (optional) Workspace-wide steering files
-│   ├── product.md              # Product vision, target users
-│   ├── tech.md                 # Technology stack, patterns, libraries
-│   ├── structure.md            # Directory structure, module boundaries
-│   └── testing.md              # Test conventions, coverage requirements
-├── _steering.md                # (optional) Legacy workspace-wide domain context
-├── _role.md                    # (optional, legacy) Workspace role fallback
-└── _prompts/                   # (optional) Workspace-wide prompt overrides
+│   ├── spec.config.json
+│   ├── requirements.md
+│   ├── design.md
+│   ├── tasks.md
+│   ├── verify.md
+│   ├── _progress.json
+│   ├── _steering.md            (optional)
+│   ├── _role.md                (optional, legacy)
+│   └── _prompts/
+│       ├── requirements.md     (optional)
+│       ├── design.md
+│       ├── tasks.md
+│       └── verify.md
+├── steering/                   (optional, workspace-wide)
+│   ├── product.md
+│   ├── tech.md
+│   ├── structure.md
+│   └── testing.md
+├── _steering.md                (optional, workspace-wide legacy)
+├── _role.md                    (optional, workspace-wide legacy)
+└── _prompts/                   (optional, workspace-wide)
 ```
+
+## Runtime Paths (Important)
+
+### VS Code extension path
+
+- Default provider mode: `codex-ui`
+- Alternate mode: `lm`
+- Extension settings are under `nspec.*` in VS Code settings.
+- Extension model default (lm mode): `nspec.apiModel = gpt-5.3-codex`
+
+### CLI path
+
+- Entry: `node bin/nspec.mjs`
+- Uses environment variables (`NSPEC_API_KEY`, `NSPEC_API_BASE`, `NSPEC_MODEL`, `NSPEC_SPECS_DIR`)
+- CLI model default: `NSPEC_MODEL = gpt-4o`
+
+Do not assume extension defaults and CLI defaults are the same.
 
 ## CLI Commands
 
-All commands are run via `node bin/nspec.mjs` (or `nspec` if linked).
+### Core spec lifecycle
 
-### Initialize a new spec
 ```bash
-nspec init <name>
-# Creates .specs/<name>/ with spec.config.json
-# Prints the folder path
+nspec init <name> [--type bugfix] [--mode design-first] [--template <id>] [--format ears]
+nspec generate <name> <stage> --description "..."
+nspec verify <name> [--scheme audit|cove|committee]
+nspec cascade <name> [--from <stage>]
+nspec status [name]
+nspec refine <name> <stage> --feedback "..."
+nspec import <name> <stage> <file> [--transform]
+nspec backfill <name> requirements
 ```
 
-### Generate a stage
+### Bugfix pipeline helpers
+
 ```bash
-# Requirements (needs --description)
-nspec generate <name> requirements --description "Build a user auth system with OAuth2..."
-
-# Design (reads requirements.md as input)
-nspec generate <name> design
-
-# Tasks (reads design.md as input)
-nspec generate <name> tasks
-
-# Verify (reads all three stages)
-nspec generate <name> verify
+nspec bugfix-generate <name> <stage>
+nspec bugfix-cascade <name> [--from <stage>]
 ```
 
-### Verify with different schemes
-```bash
-nspec verify <name>                    # Default: audit (single-pass)
-nspec verify <name> --scheme cove      # Chain of Verification (question-answer)
-nspec verify <name> --scheme committee # Audit + CoVe synthesis (most thorough)
-```
+### Support utilities
 
-### Cascade (generate all downstream stages)
 ```bash
-nspec cascade <name>                   # From design through verify
-nspec cascade <name> --from tasks      # From tasks through verify
-```
-
-### Check status
-```bash
-nspec status           # List all specs with completion dots (●○○○)
-nspec status <name>    # Detail view: stages, progress %, health score
-```
-
-### Refine a stage
-```bash
-nspec refine <name> <stage> --feedback "Add rate limiting to the auth requirements"
-# If feedback is a question → prints inquiry response
-# If feedback is a change request → updates the stage file
-```
-
-### Import an existing document
-```bash
-nspec import <name> <stage> <file>              # Copy file as a spec stage
-nspec import <name> <stage> <file> --transform  # AI-convert to spec format first
-# Stages: requirements, design, tasks, verify
-# --transform converts PRDs, Notion exports, etc. into Given/When/Then format
-```
-
-### Set up agent instructions
-```bash
-nspec setup-agents     # Writes this AGENTS.md file
-```
-
-### Explain prompt sources
-```bash
+nspec templates
+nspec hooks <list|run> [hook-name]
+nspec vibe-to-spec <name> [--transcript <file>|-] [--cascade]
+nspec check-tasks <name>
 nspec explain-prompt <name> <stage>
-# Shows base template, role/steering/prompt sources, and precedence used
-```
-
-### Lint customization
-```bash
 nspec lint-customization [name]
-# Warns about risky overrides and errors on removed _sections usage
-```
-
-### Set up steering files
-```bash
-nspec setup-steering   # Generates steering files from workspace (product.md, tech.md, structure.md)
+nspec setup-steering
+nspec setup-agents
+nspec config [get|set <key> <value>]
 ```
 
 ## Stage Pipeline
 
-| Stage | Input | Output | Purpose |
-|-------|-------|--------|---------|
-| **requirements** | Feature description | FR-1..N, NFRs, constraints | What to build |
-| **design** | requirements.md | Architecture, components, data models | How to build it |
-| **tasks** | design.md | Checkbox list with S/M/L/XL estimates | What to code |
-| **verify** | All three stages | Health score, coverage matrix, gaps | Is the spec complete? |
+| Stage | Input | Output |
+|---|---|---|
+| requirements | feature description | FRs, NFRs, constraints |
+| design | requirements.md | architecture and components |
+| tasks | design.md | ordered implementation checklist |
+| verify | requirements + design + tasks | health score + coverage + gaps |
 
-## When to Use CLI vs Direct Edit
+## CLI vs Direct Edit
 
-| Action | Approach |
-|--------|----------|
-| Generate a new stage from scratch | CLI: `nspec generate` |
-| Generate all remaining stages | CLI: `nspec cascade` |
-| Run verification | CLI: `nspec verify` |
-| Small wording tweaks | Direct edit the .md file |
-| Add/remove a requirement | Direct edit, then `nspec cascade --from design` |
-| Ask a question about the spec | CLI: `nspec refine <name> <stage> --feedback "..."` |
-| Substantive rewrite of a section | CLI: `nspec refine` with change request |
-| Import an external document as a stage | CLI: `nspec import` (with optional `--transform`) |
+| Action | Recommended approach |
+|---|---|
+| Generate a new stage | CLI (`generate`) |
+| Generate downstream stages | CLI (`cascade`) |
+| Verify coverage/quality | CLI (`verify`) |
+| Small wording correction | direct markdown edit |
+| Requirement structure change | edit upstream then regenerate downstream |
+| Question/clarification on stage | `refine --feedback` |
+| Import PRD/Notion export | `import --transform` |
+
 ## Importing Existing Documents
 
-When the user says "import this document as requirements" or similar:
+Typical import flow:
 
-1. `nspec import <name> requirements <file> --transform` — converts the document (PRD, Notion export, etc.) to Given/When/Then format
-2. `nspec import <name> design <file>` — copy as-is without AI transformation
-3. After import, cascade: `nspec cascade <name>` to generate downstream stages
+1. `nspec import <name> requirements <file> --transform`
+2. `nspec import <name> design <file>`
+3. `nspec cascade <name>`
 
-The `--transform` flag uses AI to convert arbitrary documents into nSpec's structured format (numbered FRs, acceptance criteria, etc.). Without it, the file content is copied verbatim.
+## Verify-Driven Gap Fixing
 
-## Reading verify.md and Acting on Gaps
+When verify shows gaps:
 
-After running verify, check:
+1. Inspect health score and uncovered FRs.
+2. Edit upstream (`requirements.md` or `design.md`).
+3. Regenerate downstream (`cascade --from design` or later).
+4. Re-run `verify`.
 
-1. **Health Score** — Target 80+. Below 60 means significant gaps.
-2. **Coverage Matrix** — Look for `UNCOVERED` FRs. These need tasks added.
-3. **Cascade Drift** — Requirements without matching design, or design without tasks. Fix upstream first.
-4. **Gap Report** — Actionable items. Address each one, then re-verify.
+## Customization Mechanisms
 
-**Typical flow to fix gaps:**
-1. Read verify.md and identify issues
-2. Edit the upstream document (requirements.md or design.md)
-3. Run `nspec cascade <name> --from design` to regenerate downstream
-4. Run `nspec verify <name>` to confirm improvement
+Preferred order:
 
-## OpenSpec Customization
+1. steering files (`.specs/steering/*.md`)
+2. spec-local steering (`.specs/<name>/_steering.md`)
+3. `_role.md` only as legacy fallback
+4. `_prompts/<stage>.md` when full stage control is required
 
-To customize AI behavior for a specific spec:
+`_sections` is removed and no longer supported.
 
-Use steering files first; reach for `_role.md` only as a legacy fallback.
+## Steering Precedence
 
-- **`_steering.md`** — Add domain context (e.g., "This is a healthcare app, all data must be HIPAA compliant")
-- **`_role.md`** — Legacy fallback for strict lens control when steering is not enough
-- **`_prompts/<stage>.md`** — Completely replace the system prompt for a stage
+Steering merge order:
 
-Workspace-wide files in `.specs/` apply to all specs. Spec-specific files override workspace-wide.
+1. `.specs/steering/*.md` (alphabetical)
+2. `.specs/_steering.md`
+3. `.specs/<name>/_steering.md`
 
-## Steering Files
+Role precedence:
 
-Steering files inject persistent project context into every AI prompt. They live in `.specs/steering/` and are loaded alphabetically.
+1. `.specs/<name>/_role.md`
+2. `.specs/_role.md`
+3. built-in role
 
-### Setup
-```bash
-nspec setup-steering   # Auto-generates from workspace (package.json, README, tsconfig, etc.)
-```
+Prompt precedence:
 
-### What to put in steering files
-- **`product.md`** — Product vision, target users, business context
-- **`tech.md`** — Technology stack, framework conventions, library choices
-- **`structure.md`** — Directory layout, module boundaries, naming conventions
-- **`testing.md`** — Test frameworks, coverage requirements, testing patterns
+1. `.specs/<name>/_prompts/<stage>.md`
+2. `.specs/_prompts/<stage>.md`
+3. built-in stage prompt
 
-### When to update steering files
-- When you adopt a new library or framework
-- When you establish a new coding convention
-- When the project structure changes significantly
-- When you add a new integration or external dependency
-
-### How steering files work
-- All `.specs/steering/*.md` files are concatenated (alphabetically) into the system prompt
-- They are combined with `_steering.md` (workspace-wide) and `<spec>/_steering.md` (spec-specific)
-- Precedence: `steering/*.md` → `_steering.md` → `<spec>/_steering.md`
-- Removing a steering file does not break anything — they are additive
-
-### Workspace context injection
-For **design** and **tasks** stages, nSpec also reads key project files (package.json, tsconfig, directory structure, relevant source files) and injects them into the prompt. This happens automatically — no configuration needed.
-
-## Environment Variables
+## Environment Variables (CLI)
 
 | Variable | Default | Purpose |
-|----------|---------|---------|
-| `NSPEC_API_KEY` | (required) | OpenAI or Anthropic API key |
+|---|---|---|
+| `NSPEC_API_KEY` | required | API key for generation flows |
 | `NSPEC_API_BASE` | `https://api.openai.com/v1` | API base URL |
-| `NSPEC_MODEL` | `gpt-4o` | Model to use for generation |
-| `NSPEC_SPECS_DIR` | `.specs` (relative to cwd) | Specs folder path |
+| `NSPEC_MODEL` | `gpt-4o` | model ID |
+| `NSPEC_SPECS_DIR` | `.specs` | specs folder path |
 
 ## Vibe-to-Spec Workflow
 
-When the user asks you to "generate a spec" or "turn this into a spec" during a conversation:
-
-1. Save the relevant conversation context to a temporary file
-2. Run: `nspec vibe-to-spec <inferred-name> --transcript <file> --cascade`
-3. The spec pipeline will be generated from the conversation context
-
-### CLI usage
 ```bash
-# From a file
+# from file
 nspec vibe-to-spec auth-feature --transcript chat.md
 
-# From stdin
+# from stdin
 cat chat.md | nspec vibe-to-spec auth-feature
 
-# With full cascade (generates requirements → design → tasks → verify)
+# generate downstream stages automatically
 nspec vibe-to-spec auth-feature --transcript chat.md --cascade
 ```
 
-### What happens internally
-1. The transcript is parsed by AI to extract feature scope, decisions, constraints, and open questions
-2. Requirements are generated using the extracted description + full transcript as context
-3. If `--cascade` is used, design → tasks → verify are generated downstream
-4. The extracted context is saved in `spec.config.json` under `vibeContext` so downstream stages benefit from it
+## VS Code Integration Notes
 
-### Transcript format (flexible)
-```
-User: I'm thinking about adding OAuth support to the app
-Assistant: There are several approaches. You could use...
-User: Let's go with GitHub OAuth. We need session management too.
-```
-
-## Copilot / Codex Chat Integration
-
-When using GitHub Copilot or Codex in VS Code chat, nSpec registers a `@nspec` chat participant:
-
-- **`@nspec /spec <name>`** — Generate a spec from the chat conversation
-- **`@nspec /status [name]`** — Show spec status
-- **`@nspec /refine <name> <stage>`** — Refine a spec stage
-- **`@nspec /context <name>`** — Inject a spec's content (requirements + design + tasks) as context
-
-The chat participant extracts the conversation history from VS Code's chat context and runs the same vibe-to-spec pipeline.
-
-## Supervised Execution
-
-nSpec supports supervised per-task execution with diff review. This is the UI layer — Codex handles autonomous execution via AGENTS.md; this adds visual diff review and task-by-task approval.
-
-### Per-task Run
-In the VS Code panel, each incomplete task has a **Run** button. Clicking it:
-1. Sends the task + spec context to the AI via `vscode.lm` tool-calling
-2. The model proposes file changes (writeFile, editFile, runCommand)
-3. Each change opens in VS Code's native diff editor
-4. You accept or reject each change individually
-5. Accepted changes are applied; rejected changes are discarded
-6. The task is auto-marked complete if changes were accepted
-
-### Task Completion Detection
-Scan the workspace for evidence that tasks are already implemented:
-
-```bash
-nspec check-tasks <name>
-```
-
-This checks:
-- **File existence** — filenames mentioned in backticks in task labels
-- **Symbol grep** — class/function names mentioned in backticks
-- **Package.json** — package dependencies referenced in tasks
-
-Tasks scoring > 0.7 are marked COMPLETE, > 0.3 PARTIAL, otherwise INCOMPLETE.
-
-In the VS Code panel, use **Check** (per-task) or **Check All** to run detection interactively.
-
-### Run All Tasks (supervised)
-Click "Run all tasks (supervised)" to execute all incomplete tasks sequentially:
-1. Each task generates proposed changes via tool-calling
-2. Diffs are shown for review between each task
-3. Accept/reject per change
-4. Completed tasks are marked; run can be cancelled mid-way
-
-### Shell Command Allow-list
-Shell commands proposed by `runCommand` require explicit approval via dialog. Configure auto-approved prefixes in VS Code settings:
-
-```json
-"nspec.allowedCommands": ["npm install", "npm run", "npx"]
-```
+- In `codex-ui` mode, stage files are edited through Codex/ChatGPT command workflows.
+- In `lm` mode, nSpec calls APIs directly through `LMClient`.
+- Supervised task execution uses nSpec tool-call changes (`writeFile`, `editFile`, `runCommand`) with VS Code diff review and explicit accept/reject.
 
 ## codex-ui Stage Contract
 
-When `nspec.generationProvider` is `codex-ui`, stage markdown files are the contract.
-
-Each target stage file starts with an nspec header:
+When using `codex-ui`, each target stage starts with:
 
 ```md
 <!-- nspec:
@@ -315,9 +203,17 @@ done: false
 ```
 
 Rules:
+
 1. Edit the target stage file in place.
 2. Keep the header at the top.
-3. Preserve `stage` and `step_id` values exactly.
-4. Set `done: true` when the file is complete.
-5. Write the full markdown body below the header.
-6. Do not rely on chat-only output; file content is the source of truth.
+3. Preserve `stage` and `step_id` exactly.
+4. Set `done: true` when complete.
+5. Stage file content is the source of truth.
+
+## Related Docs
+
+- [README.md](README.md)
+- [readMe/INDEX.md](readMe/INDEX.md)
+- [readMe/PROMPTS.md](readMe/PROMPTS.md)
+- [readMe/EXAMPLE-USAGES.md](readMe/EXAMPLE-USAGES.md)
+- [readMe/SPEC-TAXONOMY.md](readMe/SPEC-TAXONOMY.md)

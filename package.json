@@ -2,7 +2,7 @@
   "name": "nSpec",
   "displayName": "nSpec",
   "description": "Generate and maintain structured specs (Requirements → Design → Tasks → Verify) with Codex, custom prompts, hooks, and verification for spec-driven development.",
-  "version": "0.2.4",
+  "version": "0.5.0",
   "publisher": "awilliams",
   "engines": {
     "vscode": "^1.93.0"
@@ -32,6 +32,7 @@
   "homepage": "https://github.com/nspec/nSpec#readme",
   "icon": "media/icon.png",
   "activationEvents": [
+    "onView:nspec.welcomeView",
     "onCommand:nspec.open",
     "onCommand:nspec.newSpec",
     "onCommand:nspec.setupSteering",
@@ -40,11 +41,29 @@
     "onCommand:nspec.checkTasks",
     "onCommand:nspec.validateSetup",
     "onCommand:nspec.diagnoseCodex",
-    "onCommand:nspec.probeCodexWriteTestFile",
-    "onView:nspec.welcomeView"
+    "onCommand:nspec.probeCodexWriteTestFile"
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nspec-sidebar",
+          "title": "nSpec",
+          "icon": "media/icon-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "nspec-sidebar": [
+        {
+          "id": "nspec.welcomeView",
+          "type": "webview",
+          "name": "Open nSpec",
+          "visibility": "visible"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "nspec.open",
@@ -82,29 +101,6 @@
       {
         "command": "nspec.probeCodexWriteTestFile",
         "title": "nSpec: Probe Codex Write test.md"
-      }
-    ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "nspec-sidebar",
-          "title": "nSpec",
-          "icon": "media/icon-activity.svg"
-        }
-      ]
-    },
-    "views": {
-      "nspec-sidebar": [
-        {
-          "id": "nspec.welcomeView",
-          "name": "nSpec"
-        }
-      ]
-    },
-    "viewsWelcome": [
-      {
-        "view": "nspec.welcomeView",
-        "contents": "Create and manage structured specs — Requirements → Design → Tasks → Verify.\n[Open nSpec Panel](command:nspec.open)\n[New Spec](command:nspec.newSpec)\n[Validate Setup](command:nspec.validateSetup)\n[Diagnose Codex Models](command:nspec.diagnoseCodex)"
       }
     ],
     "menus": {

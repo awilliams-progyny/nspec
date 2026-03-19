@@ -13,7 +13,9 @@ This folder is the fastest way to learn nSpec customization through concrete exa
 ## What this folder contains
 
 - `/.specs/hello-world/`:
-  - a small, practical customization set you can copy directly
+  - a neutral per-spec prompt pack that mirrors the built-in defaults
+  - includes the built-in default `_role.md` and the built-in default `_steering.md`
+  - safe to copy directly when you want tweakable prompt files without changing output
 - `/.specs/maximal-markdowns/`:
   - a “maximum expected markdowns” reference pack
   - includes workspace-level and spec-level examples
@@ -30,11 +32,16 @@ This folder is the fastest way to learn nSpec customization through concrete exa
 - Steering skills are usually enough for most teams.
 - `_prompts/<stage>.md` is powerful but higher-maintenance.
 - `_role.md` is optional legacy compatibility when steering is not enough.
+- `hello-world` is a no-op baseline: edit the files you want, delete the ones you do not, and nSpec falls back stage-by-stage.
+- In `hello-world`, `_role.md` and `_steering.md` both match the shipped built-in defaults, so users can see the baseline and edit from there.
 - Use `explain-prompt` and `lint-customization` when behavior is unclear.
 
 ## Included examples in this folder
 
 - Workspace steering: `.specs/steering/product.md`
-- Per-spec steering: `.specs/hello-world/_steering.md`
-- Per-spec role: `.specs/hello-world/_role.md`
-- Per-spec full prompt override: `.specs/hello-world/_prompts/design.md`
+- Default per-spec role: `.specs/hello-world/_role.md`
+- Default per-spec steering: `.specs/hello-world/_steering.md`
+- Default per-spec prompt pack: `.specs/hello-world/_prompts/*.md`
+- Per-spec steering example: `.specs/maximal-markdowns/spec/_steering.md`
+- Per-spec role example: `.specs/maximal-markdowns/spec/_role.md`
+- Per-spec prompt override examples: `.specs/maximal-markdowns/spec/_prompts/*.md`

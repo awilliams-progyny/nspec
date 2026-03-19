@@ -11,6 +11,7 @@ let state = {
   editMode: false,
   requirementsFormat: 'given-when-then',
   pendingWarning: null,
+  versionLabel: '',
 };
 let streamBuffer = { requirements: '', design: '', tasks: '', verify: '' };
 let streamRenderBuffer = { requirements: '', design: '', tasks: '', verify: '' };
@@ -71,6 +72,14 @@ window.addEventListener('message', e => {
     case 'saved':        showToast('Saved ✓'); break;
     case 'error':        showError(msg.message); break;
     case 'progressUpdated': handleProgressUpdated(msg.progress); break;
+    case 'verifyRefreshed':
+      state.contents.verify = msg.content || '';
+      if (state.activeStage === 'verify') renderVerifyView();
+      updateSpecStages(state.activeSpec, 'verify');
+      renderSidebar();
+      renderStageScores();
+      updateTopbarActions();
+      break;
     case 'usingCustomPrompt': showToast(`Using custom prompt for ${msg.stage}`); break;
     case 'promptsScaffolded': state.hasCustomPrompts = true; updateBreadcrumb(); break;
     case 'specRenamed': handleSpecRenamed(msg); break;
@@ -90,10 +99,12 @@ function handleInit(msg) {
   state.contents = msg.contents || {};
   state.requirementsFormat = msg.requirementsFormat || 'given-when-then';
   state.pendingWarning = null;
+  state.versionLabel = msg.versionLabel || '';
 
   const active = state.specs.find(s => s.name === state.activeSpec);
   state.progress = active?.progress || null;
 
+  renderVersionLabel();
   renderSidebar();
   if (state.activeSpec) {
     renderAllStages();
@@ -103,6 +114,8 @@ function handleInit(msg) {
     showWelcome();
   }
   renderPendingWarning();
+  renderStageScores();
+  renderVerifyView();
 }
 
 // ── Spec events ─────────────────────────────────────────────────────────────
@@ -120,6 +133,8 @@ function handleSpecCreated(msg) {
   setActiveStage('requirements');
   updateBreadcrumb();
   renderPendingWarning();
+  renderStageScores();
+  renderVerifyView();
 }
 
 function handleSpecOpened(msg) {
@@ -138,6 +153,8 @@ function handleSpecOpened(msg) {
   updateBreadcrumb();
   if (state.progress && state.activeStage === 'tasks') renderProgress(state.progress);
   renderPendingWarning();
+  renderStageScores();
+  renderVerifyView();
 }
 
 function handleProgressUpdated(progress) {
@@ -229,8 +246,8 @@ function handleStreamDone(msg) {
     } else {
       renderMarkdownInto(el, msg.content);
     }
-    if (msg.stage === 'verify') renderHealthScore(msg.content);
   }
+  if (msg.stage === 'verify') renderVerifyView();
   if (isRefineStream) {
     showToast('Document refined');
     isRefineStream = false;
@@ -266,6 +283,12 @@ function renderPendingWarning() {
   }
   wrap.classList.remove('hidden');
   text.textContent = state.pendingWarning.message || '';
+}
+
+function renderVersionLabel() {
+  const versionEl = document.getElementById('sidebar-version');
+  if (!versionEl) return;
+  versionEl.textContent = (state.versionLabel || '').trim();
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
@@ -348,12 +371,8 @@ function renderAllStages() {
     }
   }
   if (state.progress) renderProgress(state.progress);
-
-  const verifyEl = document.getElementById('md-verify');
-  if (verifyEl) {
-    renderMarkdownInto(verifyEl, state.contents.verify || '');
-    if (state.contents.verify) renderHealthScore(state.contents.verify);
-  }
+  renderVerifyView();
+  renderStageScores();
 }
 
 function renderSidebar() {
@@ -526,30 +545,88 @@ function completeStageStreamProgress(stage, failed) {
   }, delay);
 }
 
-function renderHealthScore(verifyContent) {
-  const header = document.getElementById('verify-score-header');
-  const badge = document.getElementById('health-badge');
-  const verdict = document.getElementById('health-verdict');
-  if (!header || !badge || !verdict) return;
+function scoreClass(score) {
+  if (score >= 90) return 'health-excellent';
+  if (score >= 70) return 'health-good';
+  if (score >= 50) return 'health-fair';
+  return 'health-poor';
+}
 
-  // Parse "## Spec Health Score: 84" or "## Spec Health Score: 84/100"
-  const match = verifyContent.match(/Spec Health Score[:\s]+(\d+)/i);
-  if (!match) return;
+function extractStageScore(markdown) {
+  if (!markdown) return null;
+  const match =
+    /(?:Spec Health Score|Score)\s*:?[\s-]*([0-9]{1,3})(?:\s*\/\s*(100|10))?/i.exec(markdown) ||
+    /###\s+Score[\s\S]*?-\s*([0-9]{1,3})(?:\s*\/\s*(100|10))?/i.exec(markdown);
+  if (!match) return null;
+  const raw = parseInt(match[1], 10);
+  const denominator = match[2] ? parseInt(match[2], 10) : 100;
+  if (!Number.isFinite(raw) || !Number.isFinite(denominator) || denominator <= 0) return null;
+  return Math.max(0, Math.min(100, Math.round((raw / denominator) * 100)));
+}
 
-  const score = parseInt(match[1], 10);
-  let cls = 'health-poor', emoji = '🔴';
-  if (score >= 90) { cls = 'health-excellent'; emoji = '✅'; }
-  else if (score >= 70) { cls = 'health-good'; emoji = '⚠️'; }
-  else if (score >= 50) { cls = 'health-fair'; emoji = '🟡'; }
+function getStageScore(stage) {
+  return extractStageScore(state.contents[stage] || '');
+}
 
-  // Extract verdict line (first sentence after the score heading)
-  const verdictMatch = verifyContent.match(/Spec Health Score[^\n]*\n+([^\n]{10,120})/i);
-  const verdictText = verdictMatch ? verdictMatch[1].replace(/^#+\s*/, '').trim() : '';
+function escapeRegex(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
-  header.style.display = 'flex';
-  badge.className = `health-badge ${cls}`;
-  badge.textContent = `${emoji} ${score} / 100`;
-  verdict.textContent = verdictText;
+function extractSectionText(markdown, heading) {
+  if (!markdown) return '';
+  const lines = markdown.split('\n');
+  const headingRe = new RegExp(`^#{2,3}\\s+${escapeRegex(heading)}\\s*$`, 'i');
+  const startIndex = lines.findIndex((line) => headingRe.test(line.trim()));
+  if (startIndex < 0) return '';
+  const body = [];
+  for (let index = startIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^#{2,3}\s+/i.test(line.trim())) break;
+    body.push(line);
+  }
+  return body.join('\n').trim();
+}
+
+function extractSuggestedJiraComment(markdown) {
+  return extractSectionText(markdown, 'Suggested Jira Comment');
+}
+
+function renderStageScores() {
+  STAGES.forEach((stage) => {
+    const pill = document.getElementById('pill-' + stage);
+    if (!pill) return;
+    const score = getStageScore(stage);
+    let scoreEl = pill.querySelector('.pill-score');
+    if (score === null) {
+      if (scoreEl) scoreEl.remove();
+      return;
+    }
+    if (!scoreEl) {
+      scoreEl = document.createElement('span');
+      scoreEl.className = 'pill-score';
+      pill.appendChild(scoreEl);
+    }
+    scoreEl.textContent = `${score}`;
+    scoreEl.className = `pill-score ${scoreClass(score)}`;
+  });
+}
+
+function renderVerifyView() {
+  const badge = document.getElementById('verify-badge');
+  const meta = document.getElementById('verify-meta');
+  const body = document.getElementById('md-verify');
+  if (!badge || !meta || !body) return;
+
+  const markdown = state.contents.verify || '';
+  const score = getStageScore('verify');
+  const hasContent = markdown.trim().length > 0;
+
+  badge.className = `health-badge ${scoreClass(score ?? 0)}`;
+  badge.textContent = score === null ? '0 / 100' : `${score} / 100`;
+  meta.textContent = hasContent
+    ? 'Derived from the latest requirements, design, and tasks snapshots.'
+    : 'Not generated yet';
+  renderMarkdownInto(body, markdown);
 }
 
 function renderInteractiveTasks(markdown) {
@@ -619,6 +696,8 @@ function updateTopbarActions() {
   const hasTasks = !!state.contents.tasks;
   const hasVerify = !!state.contents.verify;
   const gen = state.generating;
+  const verifyJiraComment = extractSuggestedJiraComment(state.contents.verify || '');
+  const hasCopyableVerifyJiraComment = verifyJiraComment && !/^n\/a$/i.test(verifyJiraComment);
 
   if (gen) {
     container.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:12px">
@@ -666,16 +745,18 @@ function updateTopbarActions() {
       </button>`);
       parts.push(`<button class="btn-action" id="btn-select-all" ${checked >= selectable ? 'disabled' : ''}>Select all</button>`);
       parts.push(`<button class="btn-action" id="btn-clear-all" ${checked === 0 ? 'disabled' : ''}>Clear</button>`);
-      parts.push('<button class="btn-action primary" id="btn-gen-verify" style="background:var(--yellow);border-color:var(--yellow);color:#1e1e2e">Verify →</button>');
+      parts.push('<button class="btn-action primary" id="btn-open-verify" style="background:var(--yellow);border-color:var(--yellow);color:#1e1e2e">Open Verify →</button>');
     }
   }
 
   if (stage === 'verify') {
-    if (!hasVerify && hasTasks) parts.push('<button class="btn-action primary" id="btn-gen-verify">Run Verification</button>');
-    if (hasVerify) parts.push('<button class="btn-action" id="btn-gen-verify">Re-verify</button>');
+    parts.push('<button class="btn-action primary" id="btn-refresh-verify">Refresh Verify</button>');
+    parts.push(
+      `<button class="btn-action" id="btn-copy-verify-jira" ${hasCopyableVerifyJiraComment ? '' : 'disabled'}>Copy Suggested Jira Comment</button>`
+    );
   }
 
-  if (hasContent) {
+  if (hasContent && stage !== 'verify') {
     parts.push(`<button class="btn-action icon" id="btn-refine" title="Refine ${stage}">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15.3-6.36L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15.3 6.36L3 16"/></svg>
     </button>`);
@@ -706,9 +787,20 @@ function updateTopbarActions() {
   container.querySelector('#btn-clear-all')?.addEventListener('click', () =>
     vscode.postMessage({ command: 'setAllTasksState', state: 'empty' })
   );
-  container.querySelector('#btn-gen-verify')?.addEventListener('click', () => {
+  container.querySelector('#btn-open-verify')?.addEventListener('click', () => {
+    setActiveStage('verify');
+    if (!hasVerify) {
+      vscode.postMessage({ command: 'generateVerify' });
+    }
+  });
+  container.querySelector('#btn-refresh-verify')?.addEventListener('click', () => {
     setActiveStage('verify');
     vscode.postMessage({ command: 'generateVerify' });
+  });
+  container.querySelector('#btn-copy-verify-jira')?.addEventListener('click', () => {
+    if (!hasCopyableVerifyJiraComment) return;
+    vscode.postMessage({ command: 'copyToClipboard', text: verifyJiraComment });
+    showToast('Copied Jira comment');
   });
   container.querySelector('#btn-refine')?.addEventListener('click', () => openRefineInline());
   container.querySelector('#btn-toggle-edit')?.addEventListener('click', () => toggleEditMode());
@@ -742,6 +834,7 @@ function updateBreadcrumb() {
     if (s === state.activeStage) pill.classList.add('active');
     else if (state.contents[s]) pill.classList.add('done');
   });
+  renderStageScores();
 }
 
 function setActiveStage(stage) {
@@ -902,7 +995,6 @@ function exitEditMode() {
       } else {
         renderMarkdownInto(mdEl, newContent);
       }
-      if (stage === 'verify') renderHealthScore(newContent);
     }
   }
   area.classList.remove('editing');

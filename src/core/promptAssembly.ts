@@ -8,7 +8,7 @@ import {
   loadWorkspaceConfig,
   readConfig,
 } from './specStore';
-import { buildSystemPrompt, PromptContext } from './prompts';
+import { buildSystemPrompt, PromptContext, renderPromptTemplate } from './prompts';
 
 export interface PromptAssemblyOptions {
   specsRoot: string;
@@ -96,7 +96,7 @@ export function assembleSystemPrompt(options: PromptAssemblyOptions): PromptAsse
 
   const promptOverride = resolveCustomPrompt(specsRoot, specName, stage, fallbackSpecsRoot);
   const systemPrompt = promptOverride.content
-    ? promptOverride.content.replace(/{title}/g, resolvedTitle)
+    ? renderPromptTemplate(promptOverride.content, stage, context)
     : buildSystemPrompt(stage, context);
 
   const steeringSources = findSteeringSources(specsRoot, specName);

@@ -11,6 +11,7 @@ export type {
   TaskItem,
   TaskProgress,
   TaskSelectionState,
+  WriteStageResult,
   TestQuestionnaire,
   SpecConfig,
   SpecType,
@@ -123,6 +124,28 @@ export function readStage(specName: string, stage: store.Stage): string | null {
 export function writeStage(specName: string, stage: store.Stage, content: string): void {
   const root = requireSpecsRoot();
   store.writeStage(root, specName, stage, content);
+}
+
+export function writeStageWithResult(
+  specName: string,
+  stage: store.Stage,
+  content: string
+): store.WriteStageResult {
+  const root = requireSpecsRoot();
+  return store.writeStage(root, specName, stage, content);
+}
+
+export function refreshVerify(specName: string): string | undefined {
+  const root = requireSpecsRoot();
+  return store.refreshVerify(root, specName);
+}
+
+export function getStageScoreFromContent(content: string): number | null {
+  return store.getStageScoreFromContent(content);
+}
+
+export function getSuggestedJiraCommentFromContent(content: string): string {
+  return store.getSuggestedJiraCommentFromContent(content);
 }
 
 export function createSpecFolder(

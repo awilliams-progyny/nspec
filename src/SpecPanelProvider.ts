@@ -11,7 +11,6 @@ import { TaskRunner } from './taskRunner';
 import {
   REFINE_SYSTEM,
   buildRefinementPrompt,
-  buildVerificationPrompt,
   VIBE_TO_SPEC_SYSTEM,
   buildVibeToSpecPrompt,
   CLARIFICATION_SYSTEM,
@@ -86,6 +85,17 @@ export class SpecPanelProvider {
     return vscode.workspace.getConfiguration('nspec').get<string>('specsFolder') || '.specs';
   }
 
+  private getPanelVersionLabel(): string {
+    if (this.context.extensionMode === vscode.ExtensionMode.Development) {
+      return 'dev';
+    }
+    const version = this.context.extension.packageJSON?.version;
+    if (typeof version === 'string' && version.trim()) {
+      return version.trim();
+    }
+    return '';
+  }
+
   private toWorkspaceRelativePath(filePath: string): string {
     const wsRoot = this.getWorkspaceRoot();
     if (!wsRoot) return filePath;
@@ -124,6 +134,19 @@ export class SpecPanelProvider {
     this.postMessage({ type: 'pendingMetaWarning', stage: nextStage, message });
   }
 
+  private persistStageContent(specName: string, stage: Stage, content: string): string {
+    this.lastWriteTs = Date.now();
+    const result = specManager.writeStageWithResult(specName, stage, content);
+    if (this.state.activeSpec === specName) {
+      this.state.contents[stage] = result.content;
+      if (result.verifyContent) {
+        this.state.contents.verify = result.verifyContent;
+        this.postMessage({ type: 'verifyRefreshed', content: result.verifyContent });
+      }
+    }
+    return result.content;
+  }
+
   private clearGenerationState(): void {
     this.state.generating = false;
     this.state.cancelToken?.dispose();
@@ -142,14 +165,15 @@ export class SpecPanelProvider {
       });
     }
 
+    const persistedContent = this.persistStageContent(pending.spec_name, pending.stage, content);
+
     if (pending.spec_name === this.state.activeSpec) {
-      this.state.contents[pending.stage] = content;
       this.state.activeStage = pending.stage;
       if (pending.stage === 'tasks') {
-        const progress = specManager.syncProgressFromMarkdown(pending.spec_name, content);
+        const progress = specManager.syncProgressFromMarkdown(pending.spec_name, persistedContent);
         this.postMessage({ type: 'progressUpdated', progress });
       }
-      this.postMessage({ type: 'streamDone', stage: pending.stage, content });
+      this.postMessage({ type: 'streamDone', stage: pending.stage, content: persistedContent });
     }
   }
 
@@ -274,7 +298,7 @@ export class SpecPanelProvider {
       done: 'false',
     });
     this.lastWriteTs = Date.now();
-    specManager.writeStage(specName, stage, primed);
+    fs.writeFileSync(targetFile, primed, 'utf-8');
     this.state.contents[stage] = primed;
 
     const instruction = this.writeCodexUiInstructionFile(
@@ -390,7 +414,7 @@ export class SpecPanelProvider {
       specManager.scaffoldCustomPrompts(this.state.activeSpec);
       specManager.openFileInEditor(this.state.activeSpec, 'requirements');
       vscode.window.showInformationMessage(
-        `nSpec: Created _prompts/ folder in ${this.state.activeSpec}. Drop .md files there to override stage prompts.`
+        `nSpec: Created default prompt files in ${this.state.activeSpec}/_prompts. Edit or delete the stages you want to customize.`
       );
       this.postMessage({ type: 'promptsScaffolded', specName: this.state.activeSpec });
     } else {
@@ -686,6 +710,10 @@ export class SpecPanelProvider {
           await this.handleSetRequirementsFormat(msg.format);
           break;
 
+        case 'copyToClipboard':
+          await vscode.env.clipboard.writeText(msg.text || '');
+          break;
+
         case 'cancelTaskRun':
           this.taskRunner.cancelRun();
           break;
@@ -756,6 +784,7 @@ export class SpecPanelProvider {
       activeStage: this.state.activeStage,
       contents: this.state.contents,
       requirementsFormat,
+      versionLabel: this.getPanelVersionLabel(),
     });
 
     if (
@@ -985,6 +1014,7 @@ export class SpecPanelProvider {
     if (!transform) {
       specManager.importFile(this.state.activeSpec, stage, filePath);
       this.state.contents[stage] = specManager.readStage(this.state.activeSpec, stage) ?? '';
+      this.state.contents.verify = specManager.readStage(this.state.activeSpec, 'verify') ?? '';
       const progress =
         stage === 'tasks' ? specManager.readTaskProgress(this.state.activeSpec) : null;
       const requirementsFormat =
@@ -1048,17 +1078,16 @@ export class SpecPanelProvider {
           this.postMessage({ type: 'streamChunk', stage, chunk });
         },
         () => {
-          specManager.writeStage(this.state.activeSpec!, stage, accumulated);
-          this.state.contents[stage] = accumulated;
+          const persisted = this.persistStageContent(this.state.activeSpec!, stage, accumulated);
           if (stage === 'tasks') {
             const progress = specManager.syncProgressFromMarkdown(
               this.state.activeSpec!,
-              accumulated
+              persisted
             );
             this.postMessage({ type: 'progressUpdated', progress });
           }
           const specName = this.state.activeSpec;
-          this.postMessage({ type: 'streamDone', stage, content: accumulated });
+          this.postMessage({ type: 'streamDone', stage, content: persisted });
           const requirementsFormat = specName
             ? (specManager.readConfig(specName)?.requirementsFormat ?? undefined)
             : undefined;
@@ -1149,8 +1178,18 @@ export class SpecPanelProvider {
       return;
     }
 
-    const verifyPrompt = buildVerificationPrompt(req, des, tasks);
-    await this.streamGenerate('verify', verifyPrompt, this.state.activeSpec);
+    const verifyContent = specManager.refreshVerify(this.state.activeSpec);
+    if (!verifyContent) {
+      this.postMessage({
+        type: 'error',
+        message: 'Verification requires Requirements, Design, and Tasks to all be complete.',
+      });
+      return;
+    }
+
+    this.state.contents.verify = verifyContent;
+    this.state.activeStage = 'verify';
+    this.postMessage({ type: 'verifyRefreshed', content: verifyContent });
   }
 
   private handleToggleTask(taskId: string) {
@@ -1182,7 +1221,7 @@ export class SpecPanelProvider {
     specManager.scaffoldCustomPrompts(this.state.activeSpec);
     specManager.openFileInEditor(this.state.activeSpec, 'requirements'); // open folder via file
     vscode.window.showInformationMessage(
-      `nSpec: Created _prompts/ folder in ${this.state.activeSpec}. Drop .md files there to override stage prompts.`
+      `nSpec: Created default prompt files in ${this.state.activeSpec}/_prompts. Edit or delete the stages you want to customize.`
     );
     this.postMessage({ type: 'promptsScaffolded', specName: this.state.activeSpec });
   }
@@ -1265,15 +1304,13 @@ export class SpecPanelProvider {
 
         if (this.state.activeSpec) {
           this.lastWriteTs = Date.now();
-          specManager.writeStage(this.state.activeSpec, stage, accumulated);
+          const persisted = this.persistStageContent(this.state.activeSpec, stage, accumulated);
           // When tasks complete, sync progress tracking
           if (stage === 'tasks') {
-            const progress = specManager.syncProgressFromMarkdown(
-              this.state.activeSpec,
-              accumulated
-            );
+            const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, persisted);
             this.postMessage({ type: 'progressUpdated', progress });
           }
+          accumulated = persisted;
         }
 
         this.postMessage({ type: 'streamDone', stage, content: accumulated });
@@ -1382,14 +1419,15 @@ export class SpecPanelProvider {
           this.state.contents[stage] = accumulated;
           if (this.state.activeSpec) {
             this.lastWriteTs = Date.now();
-            specManager.writeStage(this.state.activeSpec, stage, accumulated);
+            const persisted = this.persistStageContent(this.state.activeSpec, stage, accumulated);
             if (stage === 'tasks') {
               const progress = specManager.syncProgressFromMarkdown(
                 this.state.activeSpec,
-                accumulated
+                persisted
               );
               this.postMessage({ type: 'progressUpdated', progress });
             }
+            accumulated = persisted;
           }
           this.postMessage({ type: 'streamDone', stage, content: accumulated });
         }
@@ -1426,18 +1464,16 @@ export class SpecPanelProvider {
       done: 'true',
     });
 
-    this.lastWriteTs = Date.now();
-    specManager.writeStage(this.state.activeSpec, stage, patched);
-
     if (pending && pending.stage === stage && pending.step_id === stepId) {
       this.completePendingGeneration(patched, pending);
     } else {
-      this.state.contents[stage] = patched;
+      this.lastWriteTs = Date.now();
+      const persisted = this.persistStageContent(this.state.activeSpec, stage, patched);
       if (stage === 'tasks') {
-        const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, patched);
+        const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, persisted);
         this.postMessage({ type: 'progressUpdated', progress });
       }
-      this.postMessage({ type: 'streamDone', stage, content: patched });
+      this.postMessage({ type: 'streamDone', stage, content: persisted });
     }
 
     this.setPendingWarning(null);
@@ -1448,11 +1484,10 @@ export class SpecPanelProvider {
 
   private handleSaveContent(stage: Stage, content: string) {
     if (!this.state.activeSpec) return;
-    this.state.contents[stage] = content;
     this.lastWriteTs = Date.now();
-    specManager.writeStage(this.state.activeSpec, stage, content);
+    const persisted = this.persistStageContent(this.state.activeSpec, stage, content);
     if (stage === 'tasks') {
-      const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, content);
+      const progress = specManager.syncProgressFromMarkdown(this.state.activeSpec, persisted);
       this.postMessage({ type: 'progressUpdated', progress });
     }
     this.postMessage({ type: 'saved', stage });
@@ -1522,6 +1557,10 @@ export class SpecPanelProvider {
     vscode.window.showInformationMessage(
       'nSpec: Run checked sent to Codex via ' + startResult.commandId + ' and auto-submitted.'
     );
+    this.postMessage({
+      type: 'taskOutput',
+      text: 'Run checked was sent to Codex. Refresh verify after task execution if you want an updated summary.',
+    });
   }
 
   private trimForPrompt(text: string, maxChars = 8000): string {

@@ -62,6 +62,7 @@ export type ToExtensionMessage =
   | { command: 'checkAllTasks' }
   | { command: 'importFromFile' }
   | { command: 'setRequirementsFormat'; format: 'given-when-then' | 'ears' }
+  | { command: 'copyToClipboard'; text: string }
   | { command: 'cancelTaskRun' }
   | {
       command: 'startClarification';
@@ -89,6 +90,7 @@ export type FromExtensionMessage =
       activeStage: Stage;
       contents: Partial<Record<Stage, string>>;
       requirementsFormat?: string;
+      versionLabel?: string;
     }
   | { type: 'triggerNewSpec' }
   | {
@@ -109,6 +111,7 @@ export type FromExtensionMessage =
       hasCustomPrompts: boolean;
       requirementsFormat?: string;
     }
+  | { type: 'verifyRefreshed'; content: string }
   | { type: 'specDeleted'; specName: string }
   | { type: 'specRenamed'; oldName: string; newName: string }
   | { type: 'streamStart'; stage: Stage; isRefine?: boolean }

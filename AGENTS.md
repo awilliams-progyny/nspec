@@ -64,7 +64,7 @@ Do not assume extension defaults and CLI defaults are the same.
 ```bash
 nspec init <name> [--type bugfix] [--mode design-first] [--template <id>] [--format ears]
 nspec generate <name> <stage> --description "..."
-nspec verify <name> [--scheme audit|cove|committee]
+nspec verify <name>
 nspec cascade <name> [--from <stage>]
 nspec status [name]
 nspec refine <name> <stage> --feedback "..."
@@ -100,7 +100,7 @@ nspec config [get|set <key> <value>]
 | requirements | feature description | FRs, NFRs, constraints |
 | design | requirements.md | architecture and components |
 | tasks | design.md | ordered implementation checklist |
-| verify | requirements + design + tasks | health score + coverage + gaps |
+| verify | requirements + design + tasks | verdict, Jira comment, gap report, snapshots |
 
 ## CLI vs Direct Edit
 
@@ -108,7 +108,7 @@ nspec config [get|set <key> <value>]
 |---|---|
 | Generate a new stage | CLI (`generate`) |
 | Generate downstream stages | CLI (`cascade`) |
-| Verify coverage/quality | CLI (`verify`) |
+| Refresh the derived verify summary | CLI (`verify`) |
 | Small wording correction | direct markdown edit |
 | Requirement structure change | edit upstream then regenerate downstream |
 | Question/clarification on stage | `refine --feedback` |
@@ -126,7 +126,7 @@ Typical import flow:
 
 When verify shows gaps:
 
-1. Inspect health score and uncovered FRs.
+1. Inspect the verdict, gap report, and recommended additions.
 2. Edit upstream (`requirements.md` or `design.md`).
 3. Regenerate downstream (`cascade --from design` or later).
 4. Re-run `verify`.

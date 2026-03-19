@@ -1,14 +1,9 @@
 // Re-export everything from core/prompts so existing imports keep working.
 export {
   buildSystemPrompt,
+  renderPromptTemplate,
+  getDefaultPromptTemplate,
   buildRefinementPrompt,
-  buildVerificationPrompt,
-  buildCoveQuestionsSystem,
-  buildCoveQuestionsUserPrompt,
-  buildCoveVerdictSystem,
-  buildCoveVerdictUserPrompt,
-  buildCommitteeSystem,
-  buildCommitteeUserPrompt,
   injectTitle,
   buildTestScaffoldPrompt,
   buildRequirementsFromDesignPrompt,
@@ -24,10 +19,11 @@ export {
   SECTIONS,
   TEMPLATES,
   DEFAULT_ROLE,
+  DEFAULT_STEERING,
   REQUIREMENTS_FROM_DESIGN_SYSTEM,
   TASK_EXECUTION_SYSTEM,
   buildTaskExecutionPrompt,
   TASK_CHECK_SYSTEM,
   buildTaskCheckPrompt,
 } from './core/prompts';
-export type { PromptContext, VerifyScheme, BugfixStage, RequirementsFormat } from './core/prompts';
+export type { Stage, PromptContext, BugfixStage, RequirementsFormat } from './core/prompts';

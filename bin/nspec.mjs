@@ -5,7 +5,7 @@
  * Commands:
  *   nspec init <name>
  *   nspec generate <name> <stage> [--description "..."]
- *   nspec verify <name> [--scheme audit|cove|committee]
+ *   nspec verify <name>
  *   nspec cascade <name> [--from <stage>]
  *   nspec status [name]
  *   nspec refine <name> <stage> --feedback "..."
@@ -13,7 +13,7 @@
  *   nspec lint-customization [name]
  *
  * Env:
- *   NSPEC_API_KEY   — OpenAI or Anthropic API key (required for generate/verify/cascade/refine)
+ *   NSPEC_API_KEY   — OpenAI or Anthropic API key (required for generate/cascade/refine)
  *   NSPEC_API_BASE  — Base URL (default: https://api.openai.com/v1)
  *   NSPEC_MODEL     — Model ID (default: gpt-4o)
  *   NSPEC_SPECS_DIR — Specs folder (default: .specs relative to cwd)
@@ -122,7 +122,14 @@ function parseHealthScore(text) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function countUncovered(text) { return (text.match(/UNCOVERED/gi) || []).length; }
+function refreshVerifyForCli(specName) {
+  const verify = store.refreshVerify(specsDir, specName);
+  if (!verify) {
+    console.error('Error: requirements, design, and tasks stages must exist before verify.');
+    process.exit(1);
+  }
+  return verify;
+}
 
 function assembleStagePrompt(specName, stage, options = {}) {
   return promptAssembly.assembleSystemPrompt({
@@ -207,7 +214,6 @@ async function cmdInit() {
 }
 
 async function cmdGenerate() {
-  requireApiKey();
   const name = getPositional(0);
   const stage = getPositional(1);
   if (!name || !stage || !store.ALL_STAGES.includes(stage)) {
@@ -219,13 +225,13 @@ async function cmdGenerate() {
   const folderName = store.toFolderName(name);
   const description = getArg('--description');
   const formatArg = getArg('--format');
+  if (stage !== 'verify') requireApiKey();
 
   // Validate --format flag
   if (formatArg && formatArg !== 'ears' && formatArg !== 'given-when-then') {
     console.error('Error: --format must be "ears" or "given-when-then".');
     process.exit(1);
   }
-
   // Persist format to spec config if explicitly set via --format
   if (formatArg && stage === 'requirements') {
     const existing = store.readConfig(specsDir, folderName);
@@ -242,14 +248,10 @@ async function cmdGenerate() {
   let userPrompt;
 
   if (stage === 'verify') {
-    const req = store.readStage(specsDir, folderName, 'requirements');
-    const des = store.readStage(specsDir, folderName, 'design');
-    const tasks = store.readStage(specsDir, folderName, 'tasks');
-    if (!req || !des || !tasks) {
-      console.error('Error: verify requires requirements, design, and tasks stages to exist.');
-      process.exit(1);
-    }
-    userPrompt = prompts.buildVerificationPrompt(req, des, tasks);
+    const verify = refreshVerifyForCli(folderName);
+    const score = parseHealthScore(verify) ?? store.getStageScoreFromContent(verify);
+    console.log(`Health Score: ${score ?? '?'}/100`);
+    return;
   } else if (stage === 'requirements') {
     if (!description) {
       console.error('Error: --description required for requirements stage.');
@@ -292,101 +294,38 @@ async function cmdGenerate() {
 
   process.stderr.write(`  Generating ${stage}...`);
   const result = await callLLM(systemPrompt, userPrompt);
-  store.writeStage(specsDir, folderName, stage, result);
+  const writeResult = store.writeStage(specsDir, folderName, stage, result);
 
   if (stage === 'tasks') {
-    store.syncProgressFromMarkdown(specsDir, folderName, result);
+    store.syncProgressFromMarkdown(specsDir, folderName, writeResult.content);
   }
 
-  if (stage === 'verify') {
-    const score = parseHealthScore(result);
-    const uncovered = countUncovered(result);
-    console.log(`Health Score: ${score ?? '?'}/100 | Uncovered: ${uncovered}`);
-  } else {
-    console.log(`Wrote ${stage}.md`);
-  }
+  console.log(`Wrote ${stage}.md`);
 }
 
 async function cmdVerify() {
-  requireApiKey();
   const name = getPositional(0);
-  if (!name) { console.error('Usage: nspec verify <name> [--scheme audit|cove|committee]'); process.exit(1); }
+  if (!name) { console.error('Usage: nspec verify <name>'); process.exit(1); }
+  if (getArg('--scheme') || getArg('--phase')) {
+    console.error('Error: nspec verify no longer accepts --scheme or --phase in 0.5.0.');
+    process.exit(1);
+  }
 
   const folderName = store.toFolderName(name);
-  const scheme = getArg('--scheme') || 'audit';
-  if (!['audit', 'cove', 'committee'].includes(scheme)) {
-    console.error('Error: --scheme must be audit, cove, or committee');
-    process.exit(1);
-  }
-
-  const req = store.readStage(specsDir, folderName, 'requirements');
-  const des = store.readStage(specsDir, folderName, 'design');
-  const tasks = store.readStage(specsDir, folderName, 'tasks');
-  if (!req || !des || !tasks) {
-    console.error('Error: requirements, design, and tasks stages must exist before verify.');
-    process.exit(1);
-  }
-
-  const verifyAssembly = assembleStagePrompt(folderName, 'verify');
-  const ctx = verifyAssembly.context;
-  let result;
-
-  if (scheme === 'audit') {
-    process.stderr.write('  Verifying (audit)...');
-    const sys = verifyAssembly.systemPrompt;
-    const user = prompts.buildVerificationPrompt(req, des, tasks);
-    result = await callLLM(sys, user);
-  } else if (scheme === 'cove') {
-    process.stderr.write('  CoVe questions...');
-    const qSys = prompts.buildCoveQuestionsSystem(ctx);
-    const qUser = prompts.buildCoveQuestionsUserPrompt(req, des, tasks);
-    const questions = await callLLM(qSys, qUser);
-
-    process.stderr.write('  CoVe verdict...');
-    const vSys = prompts.buildCoveVerdictSystem(ctx);
-    const vUser = prompts.buildCoveVerdictUserPrompt(req, des, tasks, questions);
-    result = await callLLM(vSys, vUser);
-  } else {
-    // committee
-    process.stderr.write('  Audit + CoVe questions (parallel)...');
-    const auditSys = verifyAssembly.systemPrompt;
-    const auditUser = prompts.buildVerificationPrompt(req, des, tasks);
-    const qSys = prompts.buildCoveQuestionsSystem(ctx);
-    const qUser = prompts.buildCoveQuestionsUserPrompt(req, des, tasks);
-
-    const [auditResult, questions] = await Promise.all([
-      callLLM(auditSys, auditUser),
-      callLLM(qSys, qUser),
-    ]);
-
-    process.stderr.write('  CoVe verdict...');
-    const vSys = prompts.buildCoveVerdictSystem(ctx);
-    const vUser = prompts.buildCoveVerdictUserPrompt(req, des, tasks, questions);
-    const coveVerdict = await callLLM(vSys, vUser);
-
-    process.stderr.write('  Committee synthesis...');
-    const cSys = prompts.buildCommitteeSystem(ctx);
-    const cUser = prompts.buildCommitteeUserPrompt(auditResult, coveVerdict);
-    result = await callLLM(cSys, cUser);
-  }
-
-  store.writeStage(specsDir, folderName, 'verify', result);
-
-  const score = parseHealthScore(result);
-  const uncovered = countUncovered(result);
-  console.log(`Health Score: ${score ?? '?'}/100 | Uncovered: ${uncovered} | Scheme: ${scheme}`);
+  const verify = refreshVerifyForCli(folderName);
+  const score = parseHealthScore(verify) ?? store.getStageScoreFromContent(verify);
+  console.log(`Health Score: ${score ?? '?'}/100`);
 }
 
 const PIPELINE_ORDER = ['requirements', 'design', 'tasks', 'verify'];
 
 async function cmdCascade() {
-  requireApiKey();
   const name = getPositional(0);
   if (!name) { console.error('Usage: nspec cascade <name> [--from <stage>]'); process.exit(1); }
 
   const folderName = store.toFolderName(name);
   const from = getArg('--from') || 'design';
-  const scheme = getArg('--scheme') || 'audit';
+  if (from !== 'verify') requireApiKey();
   const contextSpec = getArg('--context');
   let crossContext = '';
   if (contextSpec) {
@@ -449,21 +388,9 @@ async function cmdCascade() {
       store.syncProgressFromMarkdown(specsDir, folderName, result);
       console.log('  Wrote tasks.md');
     } else if (stage === 'verify') {
-      const req = store.readStage(specsDir, folderName, 'requirements');
-      const des = store.readStage(specsDir, folderName, 'design');
-      const tasks = store.readStage(specsDir, folderName, 'tasks');
-      if (!req || !des || !tasks) {
-        console.error('Error: all three stages must exist for verify.');
-        process.exit(1);
-      }
-      process.stderr.write(`  Verifying (${scheme})...`);
-      const user = prompts.buildVerificationPrompt(req, des, tasks);
-      const result = await callLLM(sys, user);
-      store.writeStage(specsDir, folderName, 'verify', result);
-
-      const score = parseHealthScore(result);
-      const uncovered = countUncovered(result);
-      console.log(`  Health Score: ${score ?? '?'}/100 | Uncovered: ${uncovered}`);
+      const verify = refreshVerifyForCli(folderName);
+      const score = parseHealthScore(verify) ?? store.getStageScoreFromContent(verify);
+      console.log(`  Health Score: ${score ?? '?'}/100`);
     }
   }
 
@@ -648,7 +575,19 @@ function cmdStatus() {
       const pct = spec.progress
         ? ` ${spec.progress.done}/${spec.progress.total} tasks`
         : '';
-      console.log(`  ${stages}  ${spec.name}${pct}`);
+      const reqScore = spec.stages.requirements
+        ? (store.getStageScoreFromContent(spec.stages.requirements) ?? 0)
+        : 0;
+      const designScore = spec.stages.design
+        ? (store.getStageScoreFromContent(spec.stages.design) ?? 0)
+        : 0;
+      const tasksScore = spec.stages.tasks
+        ? (store.getStageScoreFromContent(spec.stages.tasks) ?? 0)
+        : 0;
+      const verifyScore = spec.stages.verify
+        ? (store.getStageScoreFromContent(spec.stages.verify) ?? 0)
+        : 0;
+      console.log(`  ${stages}  ${spec.name}${pct}  score[R:${reqScore} D:${designScore} T:${tasksScore} V:${verifyScore}]`);
     }
   } else {
     // Show single spec detail
@@ -675,11 +614,11 @@ function cmdStatus() {
       console.log(`\n  Progress: ${spec.progress.done}/${spec.progress.total} (${pct}%)`);
     }
 
-    // Show health score if verify exists
-    if (spec.stages.verify) {
-      const score = parseHealthScore(spec.stages.verify);
-      if (score !== null) console.log(`  Health Score: ${score}/100`);
-    }
+    console.log('\n  Scores:');
+    console.log(`    requirements: ${spec.stages.requirements ? (store.getStageScoreFromContent(spec.stages.requirements) ?? 0) : 0}/100`);
+    console.log(`    design: ${spec.stages.design ? (store.getStageScoreFromContent(spec.stages.design) ?? 0) : 0}/100`);
+    console.log(`    tasks: ${spec.stages.tasks ? (store.getStageScoreFromContent(spec.stages.tasks) ?? 0) : 0}/100`);
+    console.log(`    verify: ${spec.stages.verify ? (store.getStageScoreFromContent(spec.stages.verify) ?? 0) : 0}/100`);
   }
 }
 
@@ -780,7 +719,7 @@ Each spec lives in \`.specs/<name>/\` as markdown files. This gives you a tracea
 │   ├── requirements.md         # Functional & non-functional requirements
 │   ├── design.md               # Technical architecture & component breakdown
 │   ├── tasks.md                # Checkbox implementation plan with effort estimates
-│   ├── verify.md               # Health score, coverage matrix, gap analysis
+│   ├── verify.md               # Derived verification summary from the latest stage snapshots
 │   ├── _progress.json          # Task completion tracking
 │   ├── _steering.md            # (optional) Domain context for this spec
 │   ├── _role.md                # (optional) Override the AI's role preamble
@@ -822,11 +761,9 @@ nspec generate <name> tasks
 nspec generate <name> verify
 \`\`\`
 
-### Verify with different schemes
+### Refresh verify
 \`\`\`bash
-nspec verify <name>                    # Default: audit (single-pass)
-nspec verify <name> --scheme cove      # Chain of Verification (question-answer)
-nspec verify <name> --scheme committee # Audit + CoVe synthesis (most thorough)
+nspec verify <name>                    # Rebuild verify.md from the current requirements/design/tasks
 \`\`\`
 
 ### Cascade (generate all downstream stages)
@@ -865,7 +802,7 @@ nspec setup-steering   # Generates steering files from workspace (product.md, te
 | **requirements** | Feature description | FR-1..N, NFRs, constraints | What to build |
 | **design** | requirements.md | Architecture, components, data models | How to build it |
 | **tasks** | design.md | Checkbox list with S/M/L/XL estimates | What to code |
-| **verify** | All three stages | Health score, coverage matrix, gaps | Is the spec complete? |
+| **verify** | All three stages | Verdict, Jira comment, gap report, snapshots | Is the spec actionable? |
 
 ## When to Use CLI vs Direct Edit
 
@@ -873,7 +810,7 @@ nspec setup-steering   # Generates steering files from workspace (product.md, te
 |--------|----------|
 | Generate a new stage from scratch | CLI: \`nspec generate\` |
 | Generate all remaining stages | CLI: \`nspec cascade\` |
-| Run verification | CLI: \`nspec verify\` |
+| Refresh verify summary | CLI: \`nspec verify\` |
 | Small wording tweaks | Direct edit the .md file |
 | Add/remove a requirement | Direct edit, then \`nspec cascade --from design\` |
 | Ask a question about the spec | CLI: \`nspec refine <name> <stage> --feedback "..."\` |
@@ -883,10 +820,10 @@ nspec setup-steering   # Generates steering files from workspace (product.md, te
 
 After running verify, check:
 
-1. **Health Score** — Target 80+. Below 60 means significant gaps.
-2. **Coverage Matrix** — Look for \`UNCOVERED\` FRs. These need tasks added.
-3. **Cascade Drift** — Requirements without matching design, or design without tasks. Fix upstream first.
-4. **Gap Report** — Actionable items. Address each one, then re-verify.
+1. **Verdict** — Is the spec ready for implementation, or is work still blocked?
+2. **Suggested Jira Comment** — Copy this only when it adds useful external context; it may be \`N/A\`.
+3. **Recommended Additions** — Add only the concrete doc edits or checklist items worth doing now.
+4. **Gap Report** — Address each meaningful blocking issue, then refresh verify if needed.
 
 **Typical flow to fix gaps:**
 1. Read verify.md and identify issues
@@ -1197,8 +1134,6 @@ async function cmdVibeToSpec() {
 
   // Step 5: Optionally cascade
   if (doCascade) {
-    const scheme = getArg('--scheme') || 'audit';
-
     // Design
     process.stderr.write('  Generating design...');
     const desSys = assembleStagePrompt(folderName, 'design').systemPrompt;
@@ -1222,15 +1157,9 @@ async function cmdVibeToSpec() {
     console.log('  Wrote tasks.md');
 
     // Verify
-    process.stderr.write(`  Verifying (${scheme})...`);
-    const verSys = assembleStagePrompt(folderName, 'verify').systemPrompt;
-    const verUser = prompts.buildVerificationPrompt(requirements, design, tasks);
-    const verify = await callLLM(verSys, verUser);
-    store.writeStage(specsDir, folderName, 'verify', verify);
-
-    const score = parseHealthScore(verify);
-    const uncovered = countUncovered(verify);
-    console.log(`  Health Score: ${score ?? '?'}/100 | Uncovered: ${uncovered}`);
+    const verify = refreshVerifyForCli(folderName);
+    const score = parseHealthScore(verify) ?? store.getStageScoreFromContent(verify);
+    console.log(`  Health Score: ${score ?? '?'}/100`);
     console.log('Vibe-to-spec cascade complete.');
   }
 }
@@ -1523,7 +1452,7 @@ Usage: nspec <command> [options]
 Commands:
   init <name> [options]               Create a new spec
   generate <name> <stage> [options]   Generate a stage (requirements|design|tasks|verify)
-  verify <name> [--scheme <scheme>]   Run verification (audit|cove|committee)
+  verify <name>                       Refresh verify.md from current stage files
   cascade <name> [--from <stage>]     Generate all stages downstream
   status [name]                       Show spec status
   refine <name> <stage> --feedback    Refine a stage with feedback
@@ -1557,7 +1486,6 @@ Config keys:
 Options:
   --specs-dir <path>       Override specs folder (default: .specs)
   --description <text>     Feature description (for requirements / root-cause)
-  --scheme <scheme>        Verification scheme: audit|cove|committee
   --from <stage>           Cascade starting point (default: design)
   --feedback <text>        Refinement feedback
   --context <spec-name>    Include another spec as reference context
@@ -1566,7 +1494,7 @@ Options:
   --cascade                Auto-cascade through design → tasks → verify
 
 Environment:
-  NSPEC_API_KEY        API key (required for generate/verify/cascade/refine)
+  NSPEC_API_KEY        API key (required for generate/cascade/refine)
   NSPEC_API_BASE       API base URL (default: https://api.openai.com/v1)
   NSPEC_MODEL          Model ID (default: gpt-4o)
   NSPEC_SPECS_DIR      Specs folder (default: .specs)`);

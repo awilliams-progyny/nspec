@@ -3,7 +3,7 @@
 > Spec-driven development for VS Code and agent workflows.
 > Build traceable `Requirements -> Design -> Tasks -> Verify` specs before implementation.
 
-[![Version](https://img.shields.io/badge/version-0.2.4-blue)](https://github.com/nspec/nSpec/releases)
+[![Version](https://img.shields.io/badge/version-0.5.0-blue)](https://github.com/nspec/nSpec/releases)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.93.0-007ACC)](https://marketplace.visualstudio.com/items?itemName=awilliams.nSpec)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
@@ -58,7 +58,7 @@ If you use `lm`, set `nspec.apiKey` (or `NSPEC_API_KEY` / `OPENAI_API_KEY`).
 2. Run **nSpec: New Spec**.
 3. Provide spec name + description.
 4. Generate requirements, then cascade.
-5. Review verify score and gaps.
+5. Review the verify verdict, recommended additions, and gap report.
 6. Run tasks in supervised mode with diff review.
 
 ## CLI Quick Path
@@ -75,7 +75,7 @@ Common flow:
 node bin/nspec.mjs init user-auth
 node bin/nspec.mjs generate user-auth requirements --description "Add GitHub OAuth"
 node bin/nspec.mjs cascade user-auth
-node bin/nspec.mjs verify user-auth --scheme committee
+node bin/nspec.mjs verify user-auth
 node bin/nspec.mjs status user-auth
 ```
 
@@ -87,7 +87,7 @@ node bin/nspec.mjs status user-auth
 | `NSPEC_MODEL` | `gpt-4o` |
 | `NSPEC_SPECS_DIR` | `.specs` |
 
-`NSPEC_API_KEY` is required for CLI generation/verify/cascade/refine flows.
+`NSPEC_API_KEY` is required for CLI generation, cascade, and refine flows. It is not required for `nspec verify`.
 
 ## Customization (Current Support)
 
@@ -122,7 +122,7 @@ Manual extension-host validation:
 |---|---|
 | codex-ui cannot generate | Run **nSpec: Diagnose Codex Models** and verify `openai.chatgpt` is installed/enabled |
 | lm provider fails auth | Set `nspec.apiKey` or `NSPEC_API_KEY` |
-| CLI says API key required | Export `NSPEC_API_KEY` before running generate/verify/cascade |
+| CLI says API key required | Export `NSPEC_API_KEY` before running generate/cascade/refine |
 | Stage appears stuck in codex-ui | Ensure nspec header stays intact and `done: true` is set |
 | Task checkbox state changed after regeneration | `_progress.json` is the source of persisted task state |
 

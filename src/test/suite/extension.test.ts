@@ -23,4 +23,26 @@ suite('nSpec Extension', () => {
     assert.ok(specCommands.length >= 5, 'Expected at least 5 nSpec commands');
     assert.ok(specCommands.includes('nspec.open'), 'nspec.open should be registered');
   });
+
+  test('nSpec contributes an Activity Bar launcher view', async () => {
+    const ext = vscode.extensions.getExtension('awilliams.nSpec');
+    assert.ok(ext, 'nSpec extension should be loaded');
+
+    const activitybar = ext?.packageJSON?.contributes?.viewsContainers?.activitybar ?? [];
+    const views = ext?.packageJSON?.contributes?.views?.['nspec-sidebar'] ?? [];
+    const welcome = ext?.packageJSON?.contributes?.viewsWelcome;
+
+    assert.ok(
+      activitybar.some((entry: { id?: string }) => entry.id === 'nspec-sidebar'),
+      'Expected an nSpec Activity Bar container contribution'
+    );
+    assert.ok(
+      views.some(
+        (entry: { id?: string; type?: string }) =>
+          entry.id === 'nspec.welcomeView' && entry.type === 'webview'
+      ),
+      'Expected an nSpec webview launcher contribution'
+    );
+    assert.strictEqual(welcome, undefined, 'Quick-action welcome content should be removed');
+  });
 });

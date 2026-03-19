@@ -35,6 +35,21 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Inter'
 .sidebar-header{padding:16px 14px 10px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)}
 .sidebar-logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px;color:var(--text)}
 .sidebar-logo svg{color:var(--accent)}
+.sidebar-version{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:28px;
+  padding:1px 7px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:var(--surface3);
+  color:var(--text-muted);
+  font-size:10px;
+  font-weight:600;
+  line-height:1.4;
+}
+.sidebar-version:empty{display:none}
 .sidebar-header-actions{position:relative;display:flex;align-items:center}
 .btn-icon{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:4px;border-radius:var(--radius-sm);display:flex;align-items:center;justify-content:center;transition:color .15s,background .15s}
 .btn-icon:hover{color:var(--text);background:var(--surface3)}
@@ -81,6 +96,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);font-family:'Inter'
 .stage-pill.done{color:var(--accent);border-color:var(--accent-dim)}
 .stage-pill .pill-num{width:18px;height:18px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-size:10px;line-height:1}
 .stage-pill.done .pill-num{background:var(--accent-dim)}
+.pill-score{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:18px;padding:0 6px;border-radius:9px;font-size:10px;font-weight:700;border:1px solid}
+.pill-score.health-excellent{background:#193126;color:#d9ffdd;border-color:#57d885}
+.pill-score.health-good{background:#1f283d;color:#8cb8ff;border-color:#4b86ff}
+.pill-score.health-fair{background:#3a2f14;color:#ffd76a;border-color:#ffbf3c}
+.pill-score.health-poor{background:#3b1f27;color:#ff9db4;border-color:#ff6f93}
 .topbar-actions-row{display:flex;align-items:center;min-width:0}
 .topbar-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;width:100%}
 .btn-action{padding:5px 13px;border-radius:var(--radius-sm);font-size:12px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .15s;border:1px solid var(--border);background:var(--surface2);color:var(--text)}
@@ -279,7 +299,15 @@ textarea.modal-input{resize:vertical;min-height:90px;line-height:1.5}
 .spec-item-dots{display:flex;gap:3px;align-items:center}
 .stage-dot.verify{background:var(--yellow)}
 /* ── Verify stage view specific ─────────────────────── */
-.verify-header{padding:16px 32px 0;display:flex;align-items:center;gap:10px}
+.verify-single{padding:16px 20px 20px;overflow:auto}
+.verify-pane{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);display:flex;flex-direction:column;min-height:420px;max-width:980px}
+.verify-pane-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 14px;border-bottom:1px solid var(--border)}
+.verify-pane-head h3{font-size:12.5px;color:var(--text);font-weight:600}
+.verify-pane-meta{padding:8px 14px 0;font-size:11px;color:var(--text-muted)}
+.verify-pane-body{padding:12px 14px 14px;overflow:auto;flex:1}
+@media (max-width: 980px){
+  .verify-single{padding:12px}
+}
 /* ── API key warning ──────────────────────────────────── */
 #api-warning{display:none;align-items:center;gap:10px;padding:8px 16px;background:var(--red-dim);border-bottom:1px solid var(--red);font-size:12.5px;color:var(--red)}
 #api-warning.visible{display:flex}

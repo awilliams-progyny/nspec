@@ -48,6 +48,7 @@ src/core/specStore.ts       prompt-related file loading
 1. `.specs/steering/*.md` (alphabetical)
 2. `.specs/_steering.md`
 3. `.specs/<name>/_steering.md`
+4. built-in default steering (used only when no steering files exist)
 
 ### Role override (legacy/optional)
 
@@ -77,6 +78,18 @@ Supported now:
 - `_prompts/<stage>.md` full overrides
 
 `_sections` is removed and no longer supported.
+
+## Prompt override placeholders
+
+Custom `_prompts/<stage>.md` files may use these placeholders:
+
+- `{title}`
+- `{role}`
+- `{steering}`
+- `{sections}`
+- `{lightDesignNote}`
+
+This keeps full prompt overrides flexible while still letting you start from the built-in defaults.
 
 ## Example-first customization recipes
 

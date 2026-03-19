@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SpecPanelProvider } from './SpecPanelProvider';
+import { NspecSidebarProvider } from './NspecSidebarProvider';
 import { loadHooks, scaffoldExamples } from './core/specStore';
 import { runMatchingHooks, HookTrigger } from './core/hooks';
 import { getSpecsRoot, getWorkspaceRoot } from './workspace';
@@ -120,6 +121,18 @@ export function activate(context: vscode.ExtensionContext) {
       });
     })
   );
+
+  try {
+    context.subscriptions.push(
+      vscode.window.registerWebviewViewProvider(
+        NspecSidebarProvider.viewId,
+        new NspecSidebarProvider(() => provider!.show())
+      )
+    );
+    logActivation('Sidebar launcher provider registered');
+  } catch (err) {
+    logActivation('Sidebar launcher provider registration failed', err);
+  }
 
   void ensureCodexAvailableAtStartup().catch((err) => {
     logActivation('Startup Codex availability check failed', err);

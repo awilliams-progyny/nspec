@@ -1,10 +1,26 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import type { Dirent } from 'fs';
+import {
+  type NormalizeStageResult,
+  type SnapshotInfo,
+  type StandardStage,
+  buildSnapshotMarkdown,
+  buildVerifyMarkdown,
+  extractSuggestedJiraComment,
+  normalizeStageContent,
+  parseScoreFromMarkdown,
+} from './verification';
+import { getDefaultPromptTemplate } from './prompts';
 
 export type Stage = 'requirements' | 'design' | 'tasks' | 'verify';
 
 export const ALL_STAGES: Stage[] = ['requirements', 'design', 'tasks', 'verify'];
+
+export interface WriteStageResult {
+  content: string;
+  verifyContent?: string;
+}
 
 const STAGE_FILES: Record<Stage, string> = {
   requirements: 'requirements.md',
@@ -16,6 +32,8 @@ const STAGE_FILES: Record<Stage, string> = {
 const CONFIG_FILE = 'spec.config.json';
 const PROGRESS_FILE = '_progress.json';
 const PROMPTS_DIR = '_prompts';
+const VERIFY_DIR = '_verify';
+const SPEC_FORMAT_VERSION = '0.5.0';
 
 export interface SpecInfo {
   name: string;
@@ -115,9 +133,26 @@ export function hasCustomPrompts(specsRoot: string, specName: string): boolean {
 export function scaffoldCustomPrompts(specsRoot: string, specName: string): void {
   const dir = path.join(specsRoot, specName, PROMPTS_DIR);
   fs.mkdirSync(dir, { recursive: true });
-  const readme = `# Custom Prompts (OpenSpec Override)\n\nDrop .md files here named requirements.md, design.md, tasks.md, or verify.md\nto override the nSpec system prompt for each stage.\n\nUse {title} as a placeholder for the spec name.\nA _prompts/ folder at .specs/_prompts/ applies workspace-wide.\n`;
-  if (!fs.existsSync(path.join(dir, 'README.md'))) {
-    fs.writeFileSync(path.join(dir, 'README.md'), readme, 'utf-8');
+  const config = readConfig(specsRoot, specName);
+  const readme = `# Custom Prompts (nSpec Override)\n\nThis folder starts with the current built-in stage prompts so you can edit only the stages you want.\nDelete any stage file to fall back to the built-in default for that stage.\n\nSupported placeholders:\n- {title}\n- {role}\n- {steering}\n- {sections}\n- {lightDesignNote}\n\nFiles in .specs/<name>/_prompts/ apply only to that spec.\nFiles in .specs/_prompts/ apply workspace-wide.\n`;
+
+  const promptTemplates: Record<Stage, string> = {
+    requirements: getDefaultPromptTemplate('requirements', config?.requirementsFormat),
+    design: getDefaultPromptTemplate('design'),
+    tasks: getDefaultPromptTemplate('tasks'),
+    verify: getDefaultPromptTemplate('verify'),
+  };
+
+  for (const [stage, content] of Object.entries(promptTemplates) as Array<[Stage, string]>) {
+    const promptPath = path.join(dir, `${stage}.md`);
+    if (!fs.existsSync(promptPath)) {
+      fs.writeFileSync(promptPath, content + '\n', 'utf-8');
+    }
+  }
+
+  const readmePath = path.join(dir, 'README.md');
+  if (!fs.existsSync(readmePath)) {
+    fs.writeFileSync(readmePath, readme, 'utf-8');
   }
 }
 
@@ -337,11 +372,87 @@ export function writeStage(
   specName: string,
   stage: Stage,
   content: string
-): void {
+): WriteStageResult {
   const dir = path.join(specsRoot, specName);
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, STAGE_FILES[stage]), content, 'utf-8');
+  const normalized =
+    stage === 'requirements' || stage === 'design' || stage === 'tasks'
+      ? normalizeStageContent(stage, content)
+      : null;
+  const nextContent = normalized?.content ?? content;
+
+  fs.writeFileSync(path.join(dir, STAGE_FILES[stage]), nextContent, 'utf-8');
   writeConfig(dir);
+
+  let verifyContent: string | undefined;
+  if (normalized) {
+    verifyContent = refreshVerify(specsRoot, specName);
+    if (!verifyContent) {
+      writeStageSnapshot(specsRoot, specName, stage as StandardStage, normalized);
+    }
+  }
+
+  return {
+    content: nextContent,
+    verifyContent,
+  };
+}
+
+function snapshotFilename(stage: StandardStage): string {
+  return `${stage}-gap.md`;
+}
+
+function writeStageSnapshot(
+  specsRoot: string,
+  specName: string,
+  stage: StandardStage,
+  normalized: NormalizeStageResult
+): SnapshotInfo {
+  const verifyDir = path.join(specsRoot, specName, VERIFY_DIR);
+  fs.mkdirSync(verifyDir, { recursive: true });
+  const updatedAt = new Date().toISOString();
+  const snapshot = buildSnapshotMarkdown(stage, normalized, updatedAt);
+  fs.writeFileSync(path.join(verifyDir, snapshotFilename(stage)), snapshot, 'utf-8');
+  return { stage, updatedAt, content: snapshot };
+}
+
+export function refreshVerify(specsRoot: string, specName: string): string | undefined {
+  const requirements = readStage(specsRoot, specName, 'requirements');
+  const design = readStage(specsRoot, specName, 'design');
+  const tasks = readStage(specsRoot, specName, 'tasks');
+  if (!requirements || !design || !tasks) return undefined;
+
+  const normalizedRequirements = normalizeStageContent('requirements', requirements);
+  const normalizedDesign = normalizeStageContent('design', design);
+  const normalizedTasks = normalizeStageContent('tasks', tasks);
+
+  const reqSnapshot = writeStageSnapshot(
+    specsRoot,
+    specName,
+    'requirements',
+    normalizedRequirements
+  );
+  const designSnapshot = writeStageSnapshot(specsRoot, specName, 'design', normalizedDesign);
+  const taskSnapshot = writeStageSnapshot(specsRoot, specName, 'tasks', normalizedTasks);
+
+  const verifyContent = buildVerifyMarkdown({
+    requirements: { ...reqSnapshot, analysis: normalizedRequirements },
+    design: { ...designSnapshot, analysis: normalizedDesign },
+    tasks: { ...taskSnapshot, analysis: normalizedTasks },
+  });
+
+  const dir = path.join(specsRoot, specName);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, STAGE_FILES.verify), verifyContent, 'utf-8');
+  return verifyContent;
+}
+
+export function getStageScoreFromContent(content: string): number | null {
+  return parseScoreFromMarkdown(content);
+}
+
+export function getSuggestedJiraCommentFromContent(content: string): string {
+  return extractSuggestedJiraComment(content);
 }
 
 export function createSpecFolder(
@@ -542,7 +653,7 @@ export function writeWorkspaceConfig(specsRoot: string, config: WorkspaceConfig)
 function writeConfig(dir: string, mode: GenerationMode = 'requirements-first', template?: string) {
   const configPath = path.join(dir, CONFIG_FILE);
   if (!fs.existsSync(configPath)) {
-    const config: SpecConfig = { generationMode: mode, version: '2.1' };
+    const config: SpecConfig = { generationMode: mode, version: SPEC_FORMAT_VERSION };
     if (mode === 'bugfix') config.specType = 'bugfix';
     if (template) config.template = template;
     fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');
@@ -1244,10 +1355,10 @@ export function importFile(
   const content = fs.readFileSync(filePath, 'utf-8');
   const dir = path.join(specsRoot, specName);
   fs.mkdirSync(dir, { recursive: true });
-  writeConfig(dir);
-  fs.writeFileSync(path.join(dir, STAGE_FILES[stage]), content, 'utf-8');
+  writeStage(specsRoot, specName, stage, content);
   if (stage === 'tasks') {
-    syncProgressFromMarkdown(specsRoot, specName, content);
+    const latest = readStage(specsRoot, specName, 'tasks') ?? content;
+    syncProgressFromMarkdown(specsRoot, specName, latest);
   }
 }
 
@@ -1335,10 +1446,10 @@ export function writeVibeContext(
     try {
       config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
     } catch {
-      config = { generationMode: 'requirements-first', version: '2.1' };
+      config = { generationMode: 'requirements-first', version: SPEC_FORMAT_VERSION };
     }
   } else {
-    config = { generationMode: 'requirements-first', version: '2.1' };
+    config = { generationMode: 'requirements-first', version: SPEC_FORMAT_VERSION };
   }
   config.vibeContext = vibeContext;
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8');

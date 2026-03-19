@@ -1,6 +1,6 @@
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type Stage = 'requirements' | 'design' | 'tasks' | 'verify';
+export type Stage = 'requirements' | 'design' | 'tasks' | 'verify';
 
 /** Requirements format for generation. */
 export type RequirementsFormat = 'given-when-then' | 'ears';
@@ -8,7 +8,7 @@ export type RequirementsFormat = 'given-when-then' | 'ears';
 export interface PromptContext {
   title: string;
   role?: string; // override the default role preamble
-  steering?: string; // domain context injected into every prompt
+  steering?: string; // optional context injected into every prompt; falls back to the built-in default steering
   /** When true, design should be light and inferred from existing codebase/adjacent components. */
   lightDesign?: boolean;
   /** When 'ears', use EARS-style requirements (WHEN/IF … THE SYSTEM SHALL). */
@@ -18,32 +18,41 @@ export interface PromptContext {
 // ── Defaults ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_ROLE = 'You are a senior software architect practising spec-driven development.';
+const DEFAULT_STEERING = `# Default Steering
+
+Baseline expectations:
+- Prefer simple, repo-native solutions that match the project scope.
+- Inspect adjacent code, checked-in generated artifacts, docs, requests, and naming patterns before inventing new structure.
+- Record assumptions and gaps explicitly instead of inventing extra scope.
+- Keep output concise, implementation-ready, and aligned with existing conventions.`;
 
 // Minimal core sections used by default stage templates.
 const SECTIONS: Record<Stage, string[]> = {
   requirements: [
     'Overview',
+    'Gaps & Analysis — place immediately after Overview; include Score, Gap Notes, optional Recommended Additions, and Suggested Jira Comment',
     'Functional Requirements — numbered (FR-1, FR-2…), each with a User Story and Acceptance Criteria in Given/When/Then format',
     'Non-Functional Requirements',
     'Constraints & Assumptions',
   ],
   design: [
     'Overview',
+    'Gaps & Analysis — place immediately after Overview; include Score, Gap Notes, optional Recommended Additions, and Suggested Jira Comment',
     'Architecture',
     'Sequence Diagrams — at least one Mermaid sequence diagram for the main user/system or component interaction flow',
     'Component Breakdown',
     'Data Models',
     'Technology Choices',
   ],
-  tasks: [],
+  tasks: [
+    'Gaps & Analysis — place before the task list; include Score, Gap Notes, optional Recommended Additions, and Suggested Jira Comment',
+  ],
   verify: [
-    'Spec Health Score [0-100] — composite score and one-line verdict',
-    'Given/When/Then Compliance — list any acceptance criteria that do not follow Given/When/Then format',
-    'Coverage Matrix — parse _Requirements: FR-N_ fields from tasks to build the matrix, flag uncovered FRs as UNCOVERED',
-    'Cascade Drift — (1) requirements not reflected in design, (2) design decisions missing from tasks, (3) requirements→design component mapping, (4) design→task mapping',
-    'Gap Report — uncovered requirements, underspecified tasks, missing risk coverage',
-    'Recommended Additions — ready-to-paste task list using - [ ] format',
-    'Verdict — one paragraph on spec quality and implementation readiness',
+    'Verdict — include Spec Health Score [0-100] and a concise implementation-readiness summary',
+    'Suggested Jira Comment — explicit copy target, allowed to be N/A if the spec is strong',
+    'Recommended Additions — only concrete doc edits or checklist items worth adding now',
+    'Gap Report — only meaningful issues that could block implementation or cause incorrect behavior',
+    'Verification Snapshots — show the latest requirements, design, and tasks gap snapshots with timestamps',
   ],
 };
 
@@ -68,9 +77,17 @@ Rules:
 - Number requirements (Requirement 1, 1.1, 1.2, Requirement 2, …).
 - Use THE SYSTEM SHALL (mandatory). Do not use "should" or "may" for mandatory behavior.
 - Each requirement must be testable and unambiguous.
-- Keep Functional Requirements to 5-10 items. Add Non-Functional Requirements (3-5) where the description implies them.
+- Match the number of requirements to the scope. Very small features may only need 3-5 functional requirements. Do not pad the document with speculative requirements.
+- Add non-functional requirements only where the description clearly implies them. Very small features may need none.
 - No implementation details — those belong in Design.
-- Do not invent features the user did not ask for.`;
+- Do not invent features the user did not ask for.
+- Score the document relative to its scope. A simple but complete spec can score high.
+- End with a \`## Gaps & Analysis\` section using exactly this structure:
+  - \`### Score\` then one bullet in \`NN/100\` format
+  - \`### Gap Notes\` with bullets
+  - \`### Recommended Additions\` with bullets only when there are concrete additions to make
+  - \`### Suggested Jira Comment\` as plain text, or \`N/A\` when there is no useful Jira comment
+- Do not use \`9/10\` or any non-100 score scale.`;
 
 const TEMPLATES: Record<Stage, string> = {
   requirements: `{role}
@@ -89,13 +106,22 @@ Each Functional Requirement MUST include:
 
 Guidelines:
 - Focus on the core MVP. Only include requirements that are essential to the described feature.
+- If the feature description is very short or refers to a well-known pattern, use the simplest conventional interpretation and record assumptions instead of inventing extra interface or validation scope.
 - Each acceptance criterion MUST use the Given/When/Then format above.
 - Do not use vague verbs (support, handle, manage) — Given/When/Then forces specificity.
-- Keep Functional Requirements to 5-10 items with 2-4 acceptance criteria each.
+- Match the number of requirements to the scope. Very small features may only need 3-5 functional requirements. Do not pad the document with speculative requirements.
+- Keep each functional requirement to 1-4 acceptance criteria.
 - Use MUST sparingly — reserve it for true must-haves. Use SHOULD and MAY for stretch goals.
-- Keep Non-Functional Requirements to 3-5 items. Only include what the description implies.
+- Add non-functional requirements only where the description clearly implies them. Very small features may need none.
 - No implementation details — those belong in Design.
-- Do not invent features, compliance programs, or infrastructure the user did not ask for.`,
+- Do not invent features, compliance programs, or infrastructure the user did not ask for.
+- Score the document relative to its scope. A simple but complete spec can score high.
+- End with a \`## Gaps & Analysis\` section using exactly this structure:
+  - \`### Score\` then one bullet in \`NN/100\` format
+  - \`### Gap Notes\` with bullets
+  - \`### Recommended Additions\` with bullets only when there are concrete additions to make
+  - \`### Suggested Jira Comment\` as plain text, or \`N/A\` when there is no useful Jira comment
+- Do not use \`9/10\` or any non-100 score scale.`,
 
   design: `{role}
 {steering}
@@ -108,11 +134,22 @@ Produce a Technical Design Document from the given Requirements Document.
 
 Guidelines:
 - Match complexity to the project scope. A simple feature gets a simple design.
+- Before inventing structure, inspect adjacent modules, checked-in generated artifacts, docs, requests, and naming patterns for the closest existing implementation shape in the repo.
+- Prefer mirroring established repo conventions over designing from first principles when both satisfy the requirements.
+- Treat consistent checked-in generated artifacts as valid contracts for naming and shape, even if regenerating them is inconvenient locally.
 - Include at least one Mermaid sequence diagram (in a \`\`\`mermaid\`\`\` code block) showing the main flow between user, system, and key components.
 - Favor the simplest technology choices that satisfy the requirements. Do not over-engineer.
 - Include code snippets and type definitions only for key interfaces and non-obvious logic.
 - Stay aligned with the Requirements. Do not introduce features or infrastructure not required.
-- Keep the document under 300 lines. If it's longer, you're over-specifying.`,
+- Do not let generator/runtime friction or local worktree drift push the design away from the repo-native end state.
+- Keep the document under 300 lines. If it's longer, you're over-specifying.
+- Score the document relative to its scope. A simple but complete design can score high.
+- End with a \`## Gaps & Analysis\` section using exactly this structure:
+  - \`### Score\` then one bullet in \`NN/100\` format
+  - \`### Gap Notes\` with bullets
+  - \`### Recommended Additions\` with bullets only when there are concrete additions to make
+  - \`### Suggested Jira Comment\` as plain text, or \`N/A\` when there is no useful Jira comment
+- Do not use \`9/10\` or any non-100 score scale.`,
 
   tasks: `{role}
 {steering}
@@ -126,29 +163,43 @@ Effort: S < 2h, M = 2-4h, L = 4-8h, XL > 8h.
 
 Guidelines:
 - Limit to 3-7 phases covering build work only. Do not include phases for documentation, deployment, post-launch, or compliance programs unless the requirements explicitly demand them.
-- Target 30-80 total tasks. If you exceed this, consolidate — group related items into single tasks with sub-steps.
+- Start from the closest existing repo pattern. Use adjacent modules, checked-in generated artifacts, docs, requests, and naming conventions to shape the plan.
+- Prefer tasks that mirror the established house style over tasks that invent a fresh structure from the spec alone.
+- Match the task count to the scope. Very small features may only need 5-15 tasks. Do not pad the plan to hit a quota.
 - Each task should map to a code change or testable outcome. Remove tasks that are purely process or ceremony.
 - Order by dependency. A developer should be able to work top-to-bottom.
 - Every task MUST end with _Requirements: FR-N, FR-N_ listing which FRs it addresses.
 - A task may cover multiple FRs. Every FR must appear in at least one task.
-- If a task has no FR mapping, it is infrastructure — mark it _Requirements: infrastructure_.`,
+- If a task has no FR mapping, it is infrastructure — mark it _Requirements: infrastructure_.
+- Do not let local generator/runtime friction or a noisy worktree change the intended repo-native end state.
+- Score the document relative to its scope. A short but complete task plan can score high.
+- End with a \`## Gaps & Analysis\` section using exactly this structure:
+  - \`### Score\` then one bullet in \`NN/100\` format
+  - \`### Gap Notes\` with bullets
+  - \`### Recommended Additions\` with bullets only when there are concrete additions to make
+  - \`### Suggested Jira Comment\` as plain text, or \`N/A\` when there is no useful Jira comment
+- Do not use \`9/10\` or any non-100 score scale.`,
 
   verify: `{role}
 {steering}
-Audit three spec documents (Requirements, Design, Tasks) for completeness and consistency.
+Summarize the current spec suite (Requirements, Design, Tasks) into a concise verification report.
 
 # Verification — {title}
 
 {sections}
 
 Guidelines:
-- Be precise and concise. Cite FR numbers and task labels.
-- Only flag real issues — not hypothetical future concerns or nice-to-haves.
-- For Given/When/Then Compliance, check each acceptance criterion in Requirements for proper Given/When/Then format. Flag any that use vague verbs or free-form prose instead of structured Given/When/Then.
-- For the Coverage Matrix, parse the _Requirements: FR-N, FR-N_ fields from each task checkbox line. Build the matrix from these parsed fields, not from inference. Flag any FR that does not appear in any task's _Requirements:_ field as UNCOVERED.
-- For Cascade Drift, check: (1) every FR in Requirements has a corresponding component or section in Design, (2) every Design component has corresponding tasks, (3) no Design decisions contradict Requirements, (4) no Tasks reference features absent from Design. Flag each drift item as DRIFT with the source FR/component.
-- Keep the Gap Report to genuine gaps, not wishlist items. If a MAY requirement is uncovered, note it but do not penalize the score.
-- Keep the entire document under 150 lines.`,
+- Be concise and actionable.
+- Keep the report focused on implementation readiness, not exhaustive auditing.
+- Check whether the design and tasks mirror the closest established repo patterns, including naming, service boundaries, checked-in generated artifacts, docs, and request examples.
+- Flag first-principles designs that ignore stable house style unless there is a clear reason to deviate.
+- Include \`Spec Health Score: NN/100\` inside the Verdict section.
+- Use \`Suggested Jira Comment\` only when there is something worth sharing externally; otherwise use \`N/A\`.
+- Keep \`Recommended Additions\` limited to concrete doc edits or checklist items.
+- Keep \`Gap Report\` limited to meaningful issues that could block implementation or cause incorrect behavior.
+- Treat generator/runtime friction and dirty-worktree drift as execution noise, not as justification for changing the target design.
+- Use \`Verification Snapshots\` to summarize what was analyzed so the reader can see the current requirements, design, and tasks context at a glance.
+- Keep the report under 120 lines.`,
 };
 
 // ── Assembly ─────────────────────────────────────────────────────────────────
@@ -160,13 +211,25 @@ const SECTIONS_EARS_REQUIREMENTS = [
   'Constraints & Assumptions',
 ];
 
-export function buildSystemPrompt(stage: Stage, ctx: PromptContext): string {
-  const useEars = stage === 'requirements' && ctx.requirementsFormat === 'ears';
-  const template = useEars ? REQUIREMENTS_EARS_TEMPLATE : TEMPLATES[stage];
+export function getDefaultPromptTemplate(
+  stage: Stage,
+  requirementsFormat?: RequirementsFormat
+): string {
+  const useEars = stage === 'requirements' && requirementsFormat === 'ears';
+  return useEars ? REQUIREMENTS_EARS_TEMPLATE : TEMPLATES[stage];
+}
+
+function renderSteeringContext(steering?: string): string {
+  return `Context:\n${steering || DEFAULT_STEERING}`;
+}
+
+export function renderPromptTemplate(template: string, stage: Stage, ctx: PromptContext): string {
   const role = ctx.role || DEFAULT_ROLE;
-  const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
+  const steering = renderSteeringContext(ctx.steering);
   const sectionList =
-    stage === 'requirements' && useEars ? SECTIONS_EARS_REQUIREMENTS : SECTIONS[stage];
+    stage === 'requirements' && ctx.requirementsFormat === 'ears'
+      ? SECTIONS_EARS_REQUIREMENTS
+      : SECTIONS[stage];
   const sectionsStr =
     sectionList.length > 0
       ? 'Include these sections:\n' + sectionList.map((s) => '- ' + s).join('\n')
@@ -187,8 +250,12 @@ export function buildSystemPrompt(stage: Stage, ctx: PromptContext): string {
     .trim();
 }
 
+export function buildSystemPrompt(stage: Stage, ctx: PromptContext): string {
+  return renderPromptTemplate(getDefaultPromptTemplate(stage, ctx.requirementsFormat), stage, ctx);
+}
+
 // Expose defaults so the harness and docs can reference them.
-export { SECTIONS, TEMPLATES, DEFAULT_ROLE };
+export { SECTIONS, TEMPLATES, DEFAULT_ROLE, DEFAULT_STEERING };
 
 // ── Refine / Ask ─────────────────────────────────────────────────────────────
 
@@ -211,114 +278,6 @@ export function buildRefinementPrompt(
 ): string {
   const historyBlock = history ? `\n\n---\n\nConversation history:\n${history}\n` : '';
   return `Here is the current ${stage} document:\n\n${currentContent}${historyBlock}\n\n---\n\nUser message:\n${feedback}\n\nIf this is a change request, return the complete updated document. If this is a question or discussion, start with \`<!-- INQUIRY -->\` and answer thoughtfully.`;
-}
-
-// ── Verification Schemes ────────────────────────────────────────────────────
-
-export type VerifyScheme = 'audit' | 'cove' | 'committee';
-
-// Audit: existing single-pass verification (buildSystemPrompt('verify', ctx))
-
-// CoVe Step 1: Generate verification questions from the three docs
-export function buildCoveQuestionsSystem(ctx: PromptContext): string {
-  const role = ctx.role || DEFAULT_ROLE;
-  const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
-  return `${role}
-${steering}
-You are performing Chain of Verification on three specification documents for: ${ctx.title}
-
-Generate 15-25 specific, answerable verification questions. Each question must be:
-- Answerable with YES, NO, or PARTIAL from the source documents alone
-- Focused on one specific requirement, design decision, or task
-- Tagged: [FR Coverage], [Design Alignment], [Task Quality], [Consistency], or [Cascade Drift]
-
-Include at least 3 [Cascade Drift] questions that check whether edits to one document propagated correctly:
-- Requirements that appear in Requirements but have no corresponding Design section
-- Design components that exist in Design but have no matching Tasks
-- Tasks that reference features or components not present in Design
-
-Format:
-1. [Category] Question?
-
-Output ONLY the numbered list. No preamble.`
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-// CoVe Step 2: Answer questions against the docs and produce scored verdict
-export function buildCoveVerdictSystem(ctx: PromptContext): string {
-  const role = ctx.role || DEFAULT_ROLE;
-  const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
-  return `${role}
-${steering}
-Complete the Chain of Verification for: ${ctx.title}
-
-You will receive three spec documents and a set of verification questions.
-1. Answer each question: YES, NO, or PARTIAL with a brief citation.
-2. Tally results and compute a score.
-3. Produce the final report.
-
-Include:
-- Spec Health Score [0-100] — YES=full credit, PARTIAL=half, NO=zero
-- Coverage Matrix — compact FR-to-task table
-- Gap Report — only issues confirmed by NO or PARTIAL answers
-- Verdict — one paragraph
-
-Keep it under 100 lines.`
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-// Committee: synthesize audit + CoVe into a combined verdict
-export function buildCommitteeSystem(ctx: PromptContext): string {
-  const role = ctx.role || DEFAULT_ROLE;
-  const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
-  return `${role}
-${steering}
-You are a review committee chair synthesizing two independent verification reports for: ${ctx.title}
-
-Produce a combined assessment:
-- Final Health Score [0-100] — weight toward the more evidence-based analysis
-- Cascade Drift — any requirements, design decisions, or tasks that are out of sync across documents (from either report)
-- Consensus Issues — gaps flagged by BOTH reports (high confidence)
-- Contested Issues — gaps flagged by only ONE report, with your judgment
-- Final Verdict — one paragraph
-
-Be decisive. If scores differ significantly, explain why.
-Keep it under 60 lines.`
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-// ── Verify user prompts ─────────────────────────────────────────────────────
-
-export function buildVerificationPrompt(
-  requirements: string,
-  design: string,
-  tasks: string
-): string {
-  return `Verify the following three specification documents.\n\n---\n## REQUIREMENTS\n${requirements}\n\n---\n## DESIGN\n${design}\n\n---\n## TASKS\n${tasks}\n\n---\nPerform the full verification audit as instructed.`;
-}
-
-export function buildCoveQuestionsUserPrompt(
-  requirements: string,
-  design: string,
-  tasks: string
-): string {
-  return `Generate verification questions for these specification documents.\n\n---\n## REQUIREMENTS\n${requirements}\n\n---\n## DESIGN\n${design}\n\n---\n## TASKS\n${tasks}\n\n---\nGenerate 15-25 specific verification questions.`;
-}
-
-export function buildCoveVerdictUserPrompt(
-  requirements: string,
-  design: string,
-  tasks: string,
-  questions: string
-): string {
-  return `Answer the verification questions and produce the scored report.\n\n---\n## REQUIREMENTS\n${requirements}\n\n---\n## DESIGN\n${design}\n\n---\n## TASKS\n${tasks}\n\n---\n## VERIFICATION QUESTIONS\n${questions}\n\n---\nAnswer each question (YES/NO/PARTIAL with citation), then produce the final scored report.`;
-}
-
-export function buildCommitteeUserPrompt(auditReport: string, coveReport: string): string {
-  return `Synthesize these two independent verification reports.\n\n---\n## AUDIT REPORT\n${auditReport}\n\n---\n## CHAIN OF VERIFICATION REPORT\n${coveReport}\n\n---\nProduce the committee verdict.`;
 }
 
 // ── Design-first: reverse requirements from design ──────────────────────────
@@ -347,7 +306,7 @@ Guidelines:
 
 export function buildRequirementsFromDesignPrompt(ctx: PromptContext): string {
   const role = ctx.role || DEFAULT_ROLE;
-  const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
+  const steering = renderSteeringContext(ctx.steering);
   const sectionsStr =
     SECTIONS.requirements.length > 0
       ? 'Include these sections:\n' + SECTIONS.requirements.map((s) => '- ' + s).join('\n')
@@ -466,7 +425,7 @@ Guidelines:
 export function buildBugfixPrompt(stage: BugfixStage, ctx: PromptContext): string {
   const template = BUGFIX_TEMPLATES[stage];
   const role = ctx.role || DEFAULT_ROLE;
-  const steering = ctx.steering ? `Context:\n${ctx.steering}` : '';
+  const steering = renderSteeringContext(ctx.steering);
 
   return template
     .replace(/{role}/g, role)

@@ -16,7 +16,8 @@
     <div class="sidebar-header">
       <div class="sidebar-logo">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-        nSpec
+        <span class="sidebar-logo-title">nSpec</span>
+        <span class="sidebar-version" id="sidebar-version"></span>
       </div>
       <div class="sidebar-header-actions">
         <button
@@ -120,11 +121,16 @@
         <div class="md-area" id="area-tasks"><div class="md-rendered" id="md-tasks"></div><textarea class="edit-textarea" id="edit-tasks"></textarea></div>
       </div>
       <div class="stage-view" id="view-verify">
-        <div id="verify-score-header" class="verify-header" style="display:none">
-          <span id="health-badge" class="health-badge health-good">- / 100</span>
-          <span style="font-size:12px;color:var(--text-muted)" id="health-verdict"></span>
+        <div class="verify-single" id="verify-single">
+          <section class="verify-pane" id="verify-pane">
+            <div class="verify-pane-head">
+              <h3>Verification Summary</h3>
+              <span id="verify-badge" class="health-badge health-fair">0 / 100</span>
+            </div>
+            <div class="verify-pane-meta" id="verify-meta">Not generated yet</div>
+            <div class="verify-pane-body md-rendered" id="md-verify"></div>
+          </section>
         </div>
-        <div class="md-area" id="area-verify"><div class="md-rendered" id="md-verify"></div><textarea class="edit-textarea" id="edit-verify"></textarea></div>
       </div>
     </div>
 
